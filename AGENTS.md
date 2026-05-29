@@ -16,8 +16,20 @@ This is **not** a sandbox. It is a pi extension that runs with normal user permi
 
 ## Important files
 
-- `extensions/tool-guard.ts` — the extension entry point.
-- `extensions/simple-permissions.ts` — the main implementation.
+- `extensions/tool-guard.ts` — the extension entry point; keep this as the package-advertised extension file.
+- `extensions/tool-guard/main.ts` — main extension wiring and event registration.
+- `extensions/tool-guard/commands.ts` — slash command registration.
+- `extensions/tool-guard/config-store.ts` — directory/repo/global rule loading and persistence.
+- `extensions/tool-guard/session-rules.ts` — session rule loading and persistence.
+- `extensions/tool-guard/tree-sitter.ts` — lazy `tree-sitter` / `tree-sitter-bash` loading.
+- `extensions/tool-guard/bash-analysis.ts` — bash parsing and risk classification.
+- `extensions/tool-guard/bash-evaluation.ts` — allow/deny evaluation for parsed bash sub-commands.
+- `extensions/tool-guard/bash-confirm.ts` — bash confirmation flow orchestration.
+- `extensions/tool-guard/path-policy.ts` — path canonicalization and inside/outside-CWD checks.
+- `extensions/tool-guard/ui.ts` — confirmation UI.
+- `extensions/tool-guard/rule-utils.ts` — shared regex/rule helpers.
+- `extensions/tool-guard/constants.ts` — rule entry IDs and command classification constants.
+- `extensions/tool-guard/types.ts` — shared types.
 - `README.md` — user-facing documentation and command examples.
 - `package.json` — package metadata and pi extension entry point.
 
@@ -66,6 +78,7 @@ When modifying the extension, preserve these policy expectations unless explicit
 - The project is ESM (`"type": "module"`).
 - Runtime dependencies are `tree-sitter` and `tree-sitter-bash`.
 - There are currently no npm test/lint scripts in `package.json`; do not invent them in documentation unless adding them.
-- Keep README behavior descriptions in sync with `extensions/simple-permissions.ts`.
-- Keep the extension entry point in `extensions/tool-guard.ts` pointing at the main implementation.
+- Keep README behavior descriptions in sync with the implementation under `extensions/tool-guard/`.
+- Keep the extension entry point in `extensions/tool-guard.ts` pointing at the main implementation under `extensions/tool-guard/main.ts`.
+- Prefer responsibility-based modules under `extensions/tool-guard/` instead of growing `extensions/tool-guard.ts` again.
 - Be careful when changing bash parsing logic: compound commands should still be analyzed per simple command where possible.

@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -6,7 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // tree-sitter and tree-sitter-bash are CommonJS packages without consistently
 // available TS declarations in extension runtimes, so load them lazily via
 // dynamic import and keep their values typed as any.
-type BashRuleScope = "session" | "directory" | "global";
+type BashRuleScope = "session" | "directory" | "repo" | "global";
 type PersistentBashRuleScope = Exclude<BashRuleScope, "session">;
 type BashRuleList = "allow" | "deny";
 type BashRule = {
@@ -26,6 +26,11 @@ type PermissionConfig = {
 	// Legacy/experimental shape support, if users created configs from early docs.
 	bashAllowRules?: StoredBashRule[];
 };
+type RepoConfigLocation = {
+	repoRoot: string;
+	commonDir: string;
+	configPath: string;
+};
 type LoadedConfigFile = {
 	path: string;
 	scope: PersistentBashRuleScope;
@@ -38,6 +43,8 @@ type LoadedConfigState = {
 	cwd: string;
 	global: LoadedConfigFile;
 	directory: LoadedConfigFile;
+	repo?: LoadedConfigFile;
+	repoLocation?: RepoConfigLocation;
 	allowRules: BashRule[];
 	denyRules: BashRule[];
 	errors: string[];
@@ -199,6 +206,66 @@ function getDirectoryConfigPath(cwd: string): string {
 	return resolve(cwd, ".pi", "simple-permissions.json");
 }
 
+function getRepoConfigPath(commonDir: string): string {
+	return resolve(commonDir, "pi-simple-permissions.json");
+}
+
+async function loadRepoConfigLocation(cwd: string): Promise<{ location?: RepoConfigLocation; errors: string[] }> {
+	let current = await realpathOrResolve(cwd);
+	const errors: string[] = [];
+
+	while (true) {
+		const gitPath = join(current, ".git");
+		try {
+			const stat = await lstat(gitPath);
+			if (stat.isDirectory()) {
+				const commonDir = await realpathOrResolve(gitPath);
+				return { location: { repoRoot: current, commonDir, configPath: getRepoConfigPath(commonDir) }, errors };
+			}
+			if (!stat.isFile()) {
+				errors.push(`${gitPath}: ignored repo config: .git is neither a file nor a directory`);
+				return { errors };
+			}
+
+			let gitDirSpec = "";
+			try {
+				gitDirSpec = await readFile(gitPath, "utf8");
+			} catch (error: any) {
+				errors.push(`${gitPath}: failed to read gitdir file: ${error.message}`);
+				return { errors };
+			}
+
+			const match = gitDirSpec.match(/^gitdir:\s*(.+)\s*$/m);
+			if (!match) {
+				errors.push(`${gitPath}: ignored repo config: malformed gitdir file`);
+				return { errors };
+			}
+
+			const gitDir = await realpathOrResolve(resolve(current, match[1]));
+			let commonDir = gitDir;
+			try {
+				const commonDirSpec = (await readFile(join(gitDir, "commondir"), "utf8")).trim();
+				if (commonDirSpec) commonDir = await realpathOrResolve(resolve(gitDir, commonDirSpec));
+			} catch (error: any) {
+				if (error?.code !== "ENOENT") {
+					errors.push(`${join(gitDir, "commondir")}: failed to read commondir: ${error.message}`);
+				}
+			}
+
+			return { location: { repoRoot: current, commonDir, configPath: getRepoConfigPath(commonDir) }, errors };
+		} catch (error: any) {
+			if (error?.code !== "ENOENT") {
+				errors.push(`${gitPath}: failed to inspect .git: ${error.message}`);
+				return { errors };
+			}
+		}
+
+		const parent = dirname(current);
+		if (parent === current) return { errors };
+		current = parent;
+	}
+}
+
 function defaultConfig(): PermissionConfig {
 	return { version: 1, bash: { allow: [], deny: [] } };
 }
@@ -274,18 +341,22 @@ async function loadConfigs(cwd: string): Promise<LoadedConfigState> {
 	if (configCache?.cwd === cwd) return configCache;
 	if (configLoadPromise?.cwd === cwd) return configLoadPromise.promise;
 	const promise = (async () => {
-		const [globalConfig, directoryConfig] = await Promise.all([
+		const [globalConfig, directoryConfig, repoLocationResult] = await Promise.all([
 			loadConfigFile(getGlobalConfigPath(), "global"),
 			loadConfigFile(getDirectoryConfigPath(cwd), "directory"),
+			loadRepoConfigLocation(cwd),
 		]);
+		const repoConfig = repoLocationResult.location ? await loadConfigFile(repoLocationResult.location.configPath, "repo") : undefined;
 		const state: LoadedConfigState = {
 			cwd,
 			global: globalConfig,
 			directory: directoryConfig,
+			repo: repoConfig,
+			repoLocation: repoLocationResult.location,
 			// More-specific allow rules are checked first. Denies win regardless of scope.
-			allowRules: [...directoryConfig.allowRules, ...globalConfig.allowRules],
-			denyRules: [...directoryConfig.denyRules, ...globalConfig.denyRules],
-			errors: [...globalConfig.errors, ...directoryConfig.errors],
+			allowRules: [...directoryConfig.allowRules, ...(repoConfig?.allowRules ?? []), ...globalConfig.allowRules],
+			denyRules: [...directoryConfig.denyRules, ...(repoConfig?.denyRules ?? []), ...globalConfig.denyRules],
+			errors: [...globalConfig.errors, ...directoryConfig.errors, ...repoLocationResult.errors, ...(repoConfig?.errors ?? [])],
 		};
 		configCache = state;
 		return state;
@@ -334,10 +405,18 @@ async function saveConfigFile(path: string, config: PermissionConfig) {
 	await rename(tmpPath, path);
 }
 
+async function resolvePersistentConfigPath(ctx: any, scope: PersistentBashRuleScope): Promise<string> {
+	if (scope === "global") return getGlobalConfigPath();
+	if (scope === "directory") return getDirectoryConfigPath(ctx.cwd);
+	const config = await loadConfigs(ctx.cwd);
+	if (!config.repoLocation) throw new Error("Not inside a Git repository; repo scope is unavailable");
+	return config.repoLocation.configPath;
+}
+
 async function addPersistentRule(ctx: any, scope: PersistentBashRuleScope, list: BashRuleList, source: string) {
 	// Validate before saving so a typo cannot poison every future session.
 	new RegExp(source);
-	const path = scope === "global" ? getGlobalConfigPath() : getDirectoryConfigPath(ctx.cwd);
+	const path = await resolvePersistentConfigPath(ctx, scope);
 	const file = await loadConfigFile(path, scope);
 	file.config.bash ??= { allow: [], deny: [] };
 	file.config.bash.allow ??= [];
@@ -348,7 +427,7 @@ async function addPersistentRule(ctx: any, scope: PersistentBashRuleScope, list:
 }
 
 async function clearPersistentRule(ctx: any, scope: PersistentBashRuleScope, list: BashRuleList, target: string) {
-	const path = scope === "global" ? getGlobalConfigPath() : getDirectoryConfigPath(ctx.cwd);
+	const path = await resolvePersistentConfigPath(ctx, scope);
 	const file = await loadConfigFile(path, scope);
 	file.config.bash ??= { allow: [], deny: [] };
 	file.config.bash.allow ??= [];
@@ -559,14 +638,16 @@ function formatBashAnalysis(analysis: BashAnalysis): string {
 	return lines.join("\n");
 }
 
-async function selectBashDecision(ctx: any, command: string, analysis: BashAnalysis): Promise<string | undefined> {
+async function selectBashDecision(ctx: any, command: string, analysis: BashAnalysis, config: LoadedConfigState): Promise<string | undefined> {
 	const choices = [
 		"Allow once",
 		"Block",
 		"Allow exact command for this session",
 		"Allow exact command for this directory",
+		...(config.repoLocation ? ["Allow exact command for this repo"] : []),
 		"Add regex allow rule for this session...",
 		"Add regex allow rule for this directory...",
+		...(config.repoLocation ? ["Add regex allow rule for this repo..."] : []),
 	];
 
 	return ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: string | undefined) => void) => {
@@ -692,7 +773,13 @@ async function selectBashDecision(ctx: any, command: string, analysis: BashAnaly
 	}, { overlay: true });
 }
 
-async function confirmBash(ctx: any, command: string, bashAllowRules: BashRule[], onSessionRulesChanged: () => void = () => {}) {
+async function confirmBash(
+	ctx: any,
+	command: string,
+	bashAllowRules: BashRule[],
+	config: LoadedConfigState,
+	onSessionRulesChanged: () => void = () => {},
+) {
 	const analysis = await analyzeBash(command);
 	const allHarmless = analysis.commands.every((item) => item.harmless);
 	if (allHarmless) {
@@ -707,7 +794,7 @@ async function confirmBash(ctx: any, command: string, bashAllowRules: BashRule[]
 		} as const;
 	}
 
-	const choice = await selectBashDecision(ctx, command, analysis);
+	const choice = await selectBashDecision(ctx, command, analysis, config);
 
 	if (choice === "Allow once") return undefined;
 
@@ -718,27 +805,37 @@ async function confirmBash(ctx: any, command: string, bashAllowRules: BashRule[]
 		return undefined;
 	}
 
-	if (choice === "Allow exact command for this directory") {
+	if (choice === "Allow exact command for this directory" || choice === "Allow exact command for this repo") {
+		const scope = choice === "Allow exact command for this repo" ? "repo" : "directory";
 		try {
-			await addPersistentRule(ctx, "directory", "allow", exactRuleSource(command));
-			ctx.ui.notify("Added exact bash allow rule for this directory.", "info");
+			await addPersistentRule(ctx, scope, "allow", exactRuleSource(command));
+			ctx.ui.notify(`Added exact bash allow rule for this ${scope}.`, "info");
 			return undefined;
 		} catch (error: any) {
-			ctx.ui.notify(`Could not save directory rule: ${error.message}`, "error");
-			return { block: true, reason: `Could not save directory rule: ${error.message}` } as const;
+			ctx.ui.notify(`Could not save ${scope} rule: ${error.message}`, "error");
+			return { block: true, reason: `Could not save ${scope} rule: ${error.message}` } as const;
 		}
 	}
 
-	if (choice === "Add regex allow rule for this session..." || choice === "Add regex allow rule for this directory...") {
-		const persistent = choice === "Add regex allow rule for this directory...";
+	if (
+		choice === "Add regex allow rule for this session..." ||
+		choice === "Add regex allow rule for this directory..." ||
+		choice === "Add regex allow rule for this repo..."
+	) {
+		const persistentScope =
+			choice === "Add regex allow rule for this directory..."
+				? "directory"
+				: choice === "Add regex allow rule for this repo..."
+					? "repo"
+					: undefined;
 		const source = await ctx.ui.input("Bash allow regex", "Example: ^ssh\\b");
 		if (!source) return { block: true, reason: "Blocked by user" } as const;
 
 		try {
 			const regex = new RegExp(source);
-			if (persistent) {
-				await addPersistentRule(ctx, "directory", "allow", source);
-				ctx.ui.notify(`Added directory bash allow rule: /${source}/`, "info");
+			if (persistentScope) {
+				await addPersistentRule(ctx, persistentScope, "allow", source);
+				ctx.ui.notify(`Added ${persistentScope} bash allow rule: /${source}/`, "info");
 			} else {
 				bashAllowRules.push({ source, regex, scope: "session", list: "allow" });
 				onSessionRulesChanged();
@@ -774,7 +871,7 @@ export default function simplePermissions(pi: ExtensionAPI) {
 
 	const splitOptionalScope = (raw: string): { scope: BashRuleScope; value: string } => {
 		const trimmed = raw.trim();
-		const match = trimmed.match(/^(session|directory|global)(?:\s+|$)/);
+		const match = trimmed.match(/^(session|directory|repo|global)(?:\s+|$)/);
 		if (!match) return { scope: "session", value: trimmed };
 		return { scope: match[1] as BashRuleScope, value: trimmed.slice(match[0].length).trim() };
 	};
@@ -793,11 +890,11 @@ export default function simplePermissions(pi: ExtensionAPI) {
 
 	const registerRuleCommand = (name: string, list: BashRuleList, exact: boolean) => {
 		pi.registerCommand(name, {
-			description: `${list === "allow" ? "Allow" : "Deny"} ${exact ? "one exact" : "matching"} bash command${exact ? "" : "s"}. Usage: /${name} [session|directory|global] <${exact ? "command" : "regex"}>`,
+			description: `${list === "allow" ? "Allow" : "Deny"} ${exact ? "one exact" : "matching"} bash command${exact ? "" : "s"}. Usage: /${name} [session|directory|repo|global] <${exact ? "command" : "regex"}>`,
 			handler: async (args, ctx) => {
 				const { scope, value } = splitOptionalScope(args);
 				if (!value) {
-					ctx.ui.notify(`Usage: /${name} [session|directory|global] <${exact ? "command" : "regex"}>`, "warning");
+					ctx.ui.notify(`Usage: /${name} [session|directory|repo|global] <${exact ? "command" : "regex"}>`, "warning");
 					return;
 				}
 
@@ -816,11 +913,11 @@ export default function simplePermissions(pi: ExtensionAPI) {
 	registerRuleCommand("perm-deny-exact", "deny", true);
 
 	pi.registerCommand("perm-list", {
-		description: "List bash allow/deny rules. Usage: /perm-list [all|session|directory|global]",
+		description: "List bash allow/deny rules. Usage: /perm-list [all|session|directory|repo|global]",
 		handler: async (args, ctx) => {
 			const scope = args.trim() || "all";
-			if (!["all", "session", "directory", "global"].includes(scope)) {
-				ctx.ui.notify("Usage: /perm-list [all|session|directory|global]", "warning");
+			if (!["all", "session", "directory", "repo", "global"].includes(scope)) {
+				ctx.ui.notify("Usage: /perm-list [all|session|directory|repo|global]", "warning");
 				return;
 			}
 
@@ -846,6 +943,10 @@ export default function simplePermissions(pi: ExtensionAPI) {
 			if (scope === "all" || scope === "directory") {
 				addScopedSections("Directory", config.directory.allowRules, config.directory.denyRules, config.directory.path);
 			}
+			if (scope === "all" || scope === "repo") {
+				if (config.repo) addScopedSections("Repo", config.repo.allowRules, config.repo.denyRules, config.repo.path);
+				else if (scope === "repo") sections.push("No Git repo detected for repo-scoped rules.");
+			}
 			if (scope === "all" || scope === "global") {
 				addScopedSections("Global", config.global.allowRules, config.global.denyRules, config.global.path);
 			}
@@ -857,7 +958,7 @@ export default function simplePermissions(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("perm-clear", {
-		description: "Clear bash rules. Usage: /perm-clear [session|directory|global] [all|allow|deny|number] [all|number]",
+		description: "Clear bash rules. Usage: /perm-clear [session|directory|repo|global] [all|allow|deny|number] [all|number]",
 		handler: async (args, ctx) => {
 			const { scope, value } = splitOptionalScope(args);
 			const parts = value.split(/\s+/).filter(Boolean);
@@ -870,7 +971,7 @@ export default function simplePermissions(pi: ExtensionAPI) {
 				}
 				const index = Number(target) - 1;
 				if (!Number.isInteger(index) || index < 0 || index >= rules.length) {
-					ctx.ui.notify("Usage: /perm-clear [session|directory|global] [all|allow|deny|number] [all|number]", "warning");
+					ctx.ui.notify("Usage: /perm-clear [session|directory|repo|global] [all|allow|deny|number] [all|number]", "warning");
 					return;
 				}
 				const [removed] = rules.splice(index, 1);
@@ -893,7 +994,7 @@ export default function simplePermissions(pi: ExtensionAPI) {
 
 			const [list, target] = parts;
 			if ((list !== "allow" && list !== "deny") || !target) {
-				ctx.ui.notify("Usage: /perm-clear <directory|global> <allow|deny> <all|number>", "warning");
+				ctx.ui.notify("Usage: /perm-clear <directory|repo|global> <allow|deny> <all|number>", "warning");
 				return;
 			}
 			try {
@@ -920,7 +1021,7 @@ export default function simplePermissions(pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event) => ({
 		systemPrompt:
 			event.systemPrompt +
-			"\n\nPermission policy active: read/list/search tools are allowed; write/edit targets inside the current working directory are allowed; write/edit targets outside the current working directory require user confirmation; agent bash tool calls are parsed with tree-sitter-bash and each simple command is classified as harmless or potentially harmful. Fully harmless bash lines are allowed automatically; potentially harmful agent bash tool calls require confirmation unless they match a session, directory, or global bash allow regex. Matching deny regexes override allows and block the bash tool call.",
+			"\n\nPermission policy active: read/list/search tools are allowed; write/edit targets inside the current working directory are allowed; write/edit targets outside the current working directory require user confirmation; agent bash tool calls are parsed with tree-sitter-bash and each simple command is classified as harmless or potentially harmful. Fully harmless bash lines are allowed automatically; potentially harmful agent bash tool calls require confirmation unless they match a session, directory, repo, or global bash allow regex. Matching deny regexes override allows and block the bash tool call.",
 	}));
 
 	pi.on("tool_call", async (event, ctx) => {
@@ -930,7 +1031,7 @@ export default function simplePermissions(pi: ExtensionAPI) {
 			const decision = bashRuleDecision(command, bashAllowRules, bashDenyRules, config);
 			if (decision?.type === "allow") return undefined;
 			if (decision?.type === "deny") return { block: true, reason: `Bash command denied by ${ruleLabel(decision.rule)}` } as const;
-			return confirmBash(ctx, command, bashAllowRules, saveSessionRules);
+			return confirmBash(ctx, command, bashAllowRules, config, saveSessionRules);
 		}
 
 		if (!WRITING_TOOLS.has(event.toolName)) return undefined;

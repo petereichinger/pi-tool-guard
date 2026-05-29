@@ -1,25 +1,26 @@
 {
-  "name": "pi-simple-permissions",
-  "version": "0.4.0",
-  "description": "A simple permission gate extension for pi: free writes in CWD, confirm writes outside CWD, confirm agent bash tool calls.",
+  "name": "pi-tool-guard",
+  "version": "0.5.0",
+  "description": "A tool guard extension for pi: free writes in CWD, confirm writes outside CWD, confirm agent bash tool calls.",
   "private": false,
   "type": "module",
   "keywords": [
     "pi-package",
     "pi",
     "pi-extension",
+    "tool-guard",
     "permissions",
     "coding-agent"
   ],
   "license": "MIT",
   "author": "Peter Eichinger <peter.eichinger@gmail.com>",
-  "homepage": "https://github.com/petereichinger/pi-simple-permissions#readme",
+  "homepage": "https://github.com/petereichinger/pi-tool-guard#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/petereichinger/pi-simple-permissions.git"
+    "url": "git+https://github.com/petereichinger/pi-tool-guard.git"
   },
   "bugs": {
-    "url": "https://github.com/petereichinger/pi-simple-permissions/issues"
+    "url": "https://github.com/petereichinger/pi-tool-guard/issues"
   },
   "dependencies": {
     "tree-sitter": "^0.21.1",
@@ -30,7 +31,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/simple-permissions.ts"
+      "./extensions/tool-guard.ts"
     ]
   }
 }

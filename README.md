@@ -1,6 +1,6 @@
-# pi-simple-permissions
+# pi-tool-guard
 
-A small [pi](https://pi.dev) extension that adds a simple permission gate:
+A small [pi](https://pi.dev) extension that adds a tool guard:
 
 - Files inside the current working directory can be read, written, edited, and created without prompting.
 - `write` / `edit` outside the current working directory require confirmation.
@@ -18,19 +18,19 @@ A small [pi](https://pi.dev) extension that adds a simple permission gate:
 After this repo is pushed to GitHub:
 
 ```bash
-pi install git:github.com/petereichinger/pi-simple-permissions
+pi install git:github.com/petereichinger/pi-tool-guard
 ```
 
 Or try it once without installing:
 
 ```bash
-pi -e git:github.com/petereichinger/pi-simple-permissions
+pi -e git:github.com/petereichinger/pi-tool-guard
 ```
 
 ## Local development
 
 ```bash
-pi -e /path/to/pi-simple-permissions
+pi -e /path/to/pi-tool-guard
 ```
 
 This extension depends on `tree-sitter` and `tree-sitter-bash`. In plain Node.js, normal package resolution is usually enough. In pi's compiled runtime, bare package resolution for extension dependencies can fail even when the packages are installed. The extension therefore falls back to direct `node_modules` entry paths for those parser packages.
@@ -42,10 +42,10 @@ This extension depends on `tree-sitter` and `tree-sitter-bash`. In plain Node.js
 Rules default to session scope. Rules are matched against each parsed bash sub-command, not the whole compound line. Operators such as `&&`, `||`, and `|` are only display context in the dialog; exact and regex rules match the underlying sub-command text itself. Session rules are stored in the current pi session log, so they survive `/reload` and quitting/resuming that session, but they do not become project-wide or global defaults. Pass `directory`, `repo`, or `global` as the first argument to persist a rule outside the session.
 
 ```text
-/perm-allow [session|directory|repo|global] <regex>
-/perm-allow-exact [session|directory|repo|global] <command>
-/perm-deny [session|directory|repo|global] <regex>
-/perm-deny-exact [session|directory|repo|global] <command>
+/guard-allow [session|directory|repo|global] <regex>
+/guard-allow-exact [session|directory|repo|global] <command>
+/guard-deny [session|directory|repo|global] <regex>
+/guard-deny-exact [session|directory|repo|global] <command>
 ```
 
 If the scope is omitted, it defaults to `session`.
@@ -53,28 +53,28 @@ If the scope is omitted, it defaults to `session`.
 Examples:
 
 ```text
-/perm-allow ^ssh\b
-/perm-allow ^git\s+(status|diff|log)\b
-/perm-allow-exact ssh myhost uptime
-/perm-deny ^sudo\b
-/perm-allow directory ^npm\s+test$
-/perm-allow repo ^git\s+push\b
-/perm-deny global ^sudo\b
+/guard-allow ^ssh\b
+/guard-allow ^git\s+(status|diff|log)\b
+/guard-allow-exact ssh myhost uptime
+/guard-deny ^sudo\b
+/guard-allow directory ^npm\s+test$
+/guard-allow repo ^git\s+push\b
+/guard-deny global ^sudo\b
 ```
 
 ### Persistent session, directory, repo, and global rules
 
-Session rules are saved as custom entries in the current pi session file. Directory rules are saved in `.pi/simple-permissions.json` under the current pi working directory. Repo rules are saved in the Git common dir as `pi-simple-permissions.json`, which means they are shared by all worktrees of the same repository. In the main worktree that is usually `.git/pi-simple-permissions.json`. Global rules are saved in `~/.pi/agent/extensions/simple-permissions.json`, or under the directory pointed to by `PI_CODING_AGENT_DIR` when that environment variable is set.
+Session rules are saved as custom entries in the current pi session file. Directory rules are saved in `.pi/tool-guard.json` under the current pi working directory. Repo rules are saved in the Git common dir as `pi-tool-guard.json`, which means they are shared by all worktrees of the same repository. In the main worktree that is usually `.git/pi-tool-guard.json`. Global rules are saved in `~/.pi/agent/extensions/tool-guard.json`, or under the directory pointed to by `PI_CODING_AGENT_DIR` when that environment variable is set. For compatibility, older `simple-permissions` config/session entries are still read.
 
 Use the optional scope argument to persist rules:
 
 ```text
-/perm-allow directory <regex>
-/perm-allow-exact directory <command>
-/perm-allow repo <regex>
-/perm-allow-exact repo <command>
-/perm-deny global <regex>
-/perm-deny-exact global <command>
+/guard-allow directory <regex>
+/guard-allow-exact directory <command>
+/guard-allow repo <regex>
+/guard-allow-exact repo <command>
+/guard-deny global <regex>
+/guard-deny-exact global <command>
 ```
 
 If you are not inside a Git repository, repo scope is unavailable.
@@ -84,11 +84,11 @@ The bash confirmation dialog can also save allow rules for each dangerous sub-co
 ### Listing and clearing rules
 
 ```text
-/perm-list [all|session|directory|repo|global]
-/perm-clear [session|directory|repo|global] [all|allow|deny|number] [all|number]
+/guard-list [all|session|directory|repo|global]
+/guard-clear [session|directory|repo|global] [all|allow|deny|number] [all|number]
 ```
 
-For backwards compatibility, `/perm-clear 2` removes session allow rule #2. Persistent rules are cleared with commands such as `/perm-clear directory allow 2`, `/perm-clear repo allow all`, or `/perm-clear global deny all`.
+For backwards compatibility, `/guard-clear 2` removes session allow rule #2. Persistent rules are cleared with commands such as `/guard-clear directory allow 2`, `/guard-clear repo allow all`, or `/guard-clear global deny all`.
 
 ## Persistent config format
 
@@ -131,6 +131,6 @@ When a potentially harmful agent bash tool call is requested, the dialog shows e
 - `read`, `ls`, `grep`, and `find` are allowed anywhere by this extension. If you want read/list restrictions too, extend the policy to gate those tools.
 - Other custom extensions/tools may mutate files internally and bypass this policy. Only run trusted extensions.
 - Bash risk analysis is conservative, not a sandbox or proof of safety. Unknown commands are considered potentially harmful, while allow rules can bypass analysis.
-- Regex allow rules are powerful. For example, `/perm-allow ^ssh\b` allows any parsed bash sub-command beginning with `ssh` for the current pi session, including inside compound lines and after `/reload` or resuming that session.
+- Regex allow rules are powerful. For example, `/guard-allow ^ssh\b` allows any parsed bash sub-command beginning with `ssh` for the current pi session, including inside compound lines and after `/reload` or resuming that session.
 - Directory/repo/global persistent rules are normal JSON files. Review them before sharing a project, especially directory rules under `.pi/` and repo rules under the shared Git metadata directory. Session rules live in the pi session file.
 - Deny rules are hard blocks and override matching allow rules at any scope.

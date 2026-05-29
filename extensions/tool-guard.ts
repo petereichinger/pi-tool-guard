@@ -86,7 +86,8 @@ type BashDialogDecision =
 	| { type: "block" }
 	| { type: "save"; scope: BashRuleScope; mode: BashSaveMode };
 
-const SESSION_RULES_ENTRY_TYPE = "simple-permissions-session-rules";
+const SESSION_RULES_ENTRY_TYPE = "tool-guard-session-rules";
+const LEGACY_SESSION_RULES_ENTRY_TYPE = "simple-permissions-session-rules";
 const WRITING_TOOLS = new Set(["write", "edit"]);
 const READ_ONLY_COMMANDS = new Set([
 	":",
@@ -250,14 +251,26 @@ function matchingBashRule(command: string, rules: BashRule[]): BashRule | undefi
 }
 
 function getGlobalConfigPath(): string {
+	return join(getAgentDir(), "extensions", "tool-guard.json");
+}
+
+function getLegacyGlobalConfigPath(): string {
 	return join(getAgentDir(), "extensions", "simple-permissions.json");
 }
 
 function getDirectoryConfigPath(cwd: string): string {
+	return resolve(cwd, ".pi", "tool-guard.json");
+}
+
+function getLegacyDirectoryConfigPath(cwd: string): string {
 	return resolve(cwd, ".pi", "simple-permissions.json");
 }
 
 function getRepoConfigPath(commonDir: string): string {
+	return resolve(commonDir, "pi-tool-guard.json");
+}
+
+function getLegacyRepoConfigPath(commonDir: string): string {
 	return resolve(commonDir, "pi-simple-permissions.json");
 }
 
@@ -365,21 +378,30 @@ function compileStoredRules(
 	return { rules, errors };
 }
 
-async function loadConfigFile(path: string, scope: PersistentBashRuleScope): Promise<LoadedConfigFile> {
-	let parsed: unknown;
+async function loadConfigFile(pathOrPaths: string | string[], scope: PersistentBashRuleScope): Promise<LoadedConfigFile> {
+	const candidatePaths = Array.isArray(pathOrPaths) ? pathOrPaths : [pathOrPaths];
+	let parsed: unknown = defaultConfig();
+	let loadedPath = candidatePaths[0]!;
 	const errors: string[] = [];
-	try {
-		parsed = JSON.parse(await readFile(path, "utf8"));
-	} catch (error: any) {
-		if (error?.code !== "ENOENT") errors.push(`${path}: failed to read config: ${error.message}`);
-		parsed = defaultConfig();
+
+	for (const path of candidatePaths) {
+		loadedPath = path;
+		try {
+			parsed = JSON.parse(await readFile(path, "utf8"));
+			break;
+		} catch (error: any) {
+			if (error?.code === "ENOENT") continue;
+			errors.push(`${path}: failed to read config: ${error.message}`);
+			parsed = defaultConfig();
+			break;
+		}
 	}
 
 	const config = normalizeConfig(parsed);
-	const allow = compileStoredRules(config.bash?.allow, scope, "allow", path);
-	const deny = compileStoredRules(config.bash?.deny, scope, "deny", path);
+	const allow = compileStoredRules(config.bash?.allow, scope, "allow", loadedPath);
+	const deny = compileStoredRules(config.bash?.deny, scope, "deny", loadedPath);
 	return {
-		path,
+		path: loadedPath,
 		scope,
 		config,
 		allowRules: allow.rules,
@@ -393,11 +415,13 @@ async function loadConfigs(cwd: string): Promise<LoadedConfigState> {
 	if (configLoadPromise?.cwd === cwd) return configLoadPromise.promise;
 	const promise = (async () => {
 		const [globalConfig, directoryConfig, repoLocationResult] = await Promise.all([
-			loadConfigFile(getGlobalConfigPath(), "global"),
-			loadConfigFile(getDirectoryConfigPath(cwd), "directory"),
+			loadConfigFile([getGlobalConfigPath(), getLegacyGlobalConfigPath()], "global"),
+			loadConfigFile([getDirectoryConfigPath(cwd), getLegacyDirectoryConfigPath(cwd)], "directory"),
 			loadRepoConfigLocation(cwd),
 		]);
-		const repoConfig = repoLocationResult.location ? await loadConfigFile(repoLocationResult.location.configPath, "repo") : undefined;
+		const repoConfig = repoLocationResult.location
+			? await loadConfigFile([repoLocationResult.location.configPath, getLegacyRepoConfigPath(repoLocationResult.location.commonDir)], "repo")
+			: undefined;
 		const state: LoadedConfigState = {
 			cwd,
 			global: globalConfig,
@@ -429,13 +453,16 @@ function loadSessionRules(ctx: any): LoadedSessionRuleState {
 	const entries = ctx.sessionManager.getEntries();
 	let latest: unknown;
 	for (const entry of entries) {
-		if (entry.type === "custom" && entry.customType === SESSION_RULES_ENTRY_TYPE) latest = entry.data;
+		if (
+			entry.type === "custom" &&
+			(entry.customType === SESSION_RULES_ENTRY_TYPE || entry.customType === LEGACY_SESSION_RULES_ENTRY_TYPE)
+		) latest = entry.data;
 	}
 	if (latest === undefined) return { allowRules: [], denyRules: [], errors: [] };
 
 	const config = normalizeConfig(latest);
-	const allow = compileStoredRules(config.bash?.allow, "session", "allow", "session permissions entry");
-	const deny = compileStoredRules(config.bash?.deny, "session", "deny", "session permissions entry");
+	const allow = compileStoredRules(config.bash?.allow, "session", "allow", "session tool-guard entry");
+	const deny = compileStoredRules(config.bash?.deny, "session", "deny", "session tool-guard entry");
 	return { allowRules: allow.rules, denyRules: deny.rules, errors: [...allow.errors, ...deny.errors] };
 }
 
@@ -962,7 +989,7 @@ async function selectBashDecision(
 				];
 				return [border("╭", "─", "╮"), ...lines.map(boxed), border("╰", "─", "╯")];
 			},
-			handleInput: (data: string) => {
+			 handleInput: (data: string) => {
 				if (stage === "action") {
 					if (data === "\x1b[A" || data === "\x1b[D") actionSelected = Math.max(0, actionSelected - 1);
 					else if (data === "\x1b[B" || data === "\x1b[C") actionSelected = Math.min(actionChoices.length - 1, actionSelected + 1);
@@ -1086,7 +1113,7 @@ async function confirmBash(
 	}
 }
 
-export default function simplePermissions(pi: ExtensionAPI) {
+export default function toolGuard(pi: ExtensionAPI) {
 	const bashAllowRules: BashRule[] = [];
 	const bashDenyRules: BashRule[] = [];
 	let sessionRuleErrors: string[] = [];
@@ -1139,17 +1166,17 @@ export default function simplePermissions(pi: ExtensionAPI) {
 		});
 	};
 
-	registerRuleCommand("perm-allow", "allow", false);
-	registerRuleCommand("perm-allow-exact", "allow", true);
-	registerRuleCommand("perm-deny", "deny", false);
-	registerRuleCommand("perm-deny-exact", "deny", true);
+	registerRuleCommand("guard-allow", "allow", false);
+	registerRuleCommand("guard-allow-exact", "allow", true);
+	registerRuleCommand("guard-deny", "deny", false);
+	registerRuleCommand("guard-deny-exact", "deny", true);
 
-	pi.registerCommand("perm-list", {
-		description: "List bash allow/deny rules. Usage: /perm-list [all|session|directory|repo|global]",
+	pi.registerCommand("guard-list", {
+		description: "List bash allow/deny rules. Usage: /guard-list [all|session|directory|repo|global]",
 		handler: async (args, ctx) => {
 			const scope = args.trim() || "all";
 			if (!["all", "session", "directory", "repo", "global"].includes(scope)) {
-				ctx.ui.notify("Usage: /perm-list [all|session|directory|repo|global]", "warning");
+				ctx.ui.notify("Usage: /guard-list [all|session|directory|repo|global]", "warning");
 				return;
 			}
 
@@ -1189,8 +1216,8 @@ export default function simplePermissions(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("perm-clear", {
-		description: "Clear bash rules. Usage: /perm-clear [session|directory|repo|global] [all|allow|deny|number] [all|number]",
+	pi.registerCommand("guard-clear", {
+		description: "Clear bash rules. Usage: /guard-clear [session|directory|repo|global] [all|allow|deny|number] [all|number]",
 		handler: async (args, ctx) => {
 			const { scope, value } = splitOptionalScope(args);
 			const parts = value.split(/\s+/).filter(Boolean);
@@ -1203,7 +1230,7 @@ export default function simplePermissions(pi: ExtensionAPI) {
 				}
 				const index = Number(target) - 1;
 				if (!Number.isInteger(index) || index < 0 || index >= rules.length) {
-					ctx.ui.notify("Usage: /perm-clear [session|directory|repo|global] [all|allow|deny|number] [all|number]", "warning");
+					ctx.ui.notify("Usage: /guard-clear [session|directory|repo|global] [all|allow|deny|number] [all|number]", "warning");
 					return;
 				}
 				const [removed] = rules.splice(index, 1);
@@ -1226,7 +1253,7 @@ export default function simplePermissions(pi: ExtensionAPI) {
 
 			const [list, target] = parts;
 			if ((list !== "allow" && list !== "deny") || !target) {
-				ctx.ui.notify("Usage: /perm-clear <directory|repo|global> <allow|deny> <all|number>", "warning");
+				ctx.ui.notify("Usage: /guard-clear <directory|repo|global> <allow|deny> <all|number>", "warning");
 				return;
 			}
 			try {
@@ -1245,7 +1272,7 @@ export default function simplePermissions(pi: ExtensionAPI) {
 		const config = await loadConfigs(ctx.cwd);
 		const warnings = [...sessionRuleErrors, ...config.errors];
 		if (ctx.hasUI) {
-			if (warnings.length > 0) ctx.ui.notify(`simple-permissions warnings:\n${warnings.join("\n")}`, "warning");
+			if (warnings.length > 0) ctx.ui.notify(`tool-guard warnings:\n${warnings.join("\n")}`, "warning");
 		}
 	});
 

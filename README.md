@@ -108,7 +108,7 @@ Bash lines are parsed with Tree-sitter, so compound lines such as `ls && rm -rf 
 
 Known read-only commands such as `ls`, `cat`, `grep`, `rg`, safe `find`, safe `sed`, and read-only `git` subcommands are treated as harmless unless they write through shell redirection. Unknown commands and known mutating patterns are treated as potentially harmful.
 
-When a potentially harmful bash command is requested, the dialog shows each command part and lets you:
+When a potentially harmful bash command is requested, the dialog shows the full command without truncation, shows each command part, and separates parser errors with a divider instead of folding them into the command list. It lets you:
 
 - Allow once
 - Block

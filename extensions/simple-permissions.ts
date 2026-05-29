@@ -604,33 +604,53 @@ async function selectBashDecision(ctx: any, command: string, analysis: BashAnaly
 			}
 			return width;
 		};
-		const truncate = (value: string, width: number) => {
-			if (visibleWidth(value) <= width) return value;
-			let output = "";
-			let used = 0;
-			const limit = Math.max(0, width - 1);
-			for (let index = 0; index < value.length;) {
-				const ansi = value.slice(index).match(ansiPattern);
-				if (ansi) {
-					output += ansi[0];
-					index += ansi[0].length;
+		const pad = (value: string, width: number) => `${value}${" ".repeat(Math.max(0, width - visibleWidth(value)))}`;
+		const wrapPlain = (value: string, width: number) => {
+			const wrapped: string[] = [];
+			for (const sourceLine of value.split(/\r?\n/)) {
+				if (sourceLine.length === 0) {
+					wrapped.push("");
 					continue;
 				}
-				const char = Array.from(value.slice(index))[0] ?? "";
-				const nextWidth = charWidth(char);
-				if (used + nextWidth > limit) break;
-				output += char;
-				used += nextWidth;
-				index += char.length;
+
+				let current = "";
+				let used = 0;
+				for (let index = 0; index < sourceLine.length;) {
+					const char = Array.from(sourceLine.slice(index))[0] ?? "";
+					const nextWidth = charWidth(char);
+					if (current.length > 0 && used + nextWidth > width) {
+						wrapped.push(current);
+						current = "";
+						used = 0;
+						continue;
+					}
+					current += char;
+					used += nextWidth;
+					index += char.length;
+					if (used >= width) {
+						wrapped.push(current);
+						current = "";
+						used = 0;
+					}
+				}
+				if (current.length > 0) wrapped.push(current);
 			}
-			return `${output}…\x1b[0m`;
+			return wrapped.length > 0 ? wrapped : [""];
 		};
-		const pad = (value: string, width: number) => `${value}${" ".repeat(Math.max(0, width - visibleWidth(value)))}`;
-		const lineForCommand = (item: BashCommandRisk) => {
-			const prefix = item.harmless ? "✅" : "⚠️";
+		const wrapPrefixed = (prefix: string, content: string, width: number, style: (value: string) => string = (value) => value) => {
+			const prefixWidth = visibleWidth(prefix);
+			const continuationPrefix = " ".repeat(prefixWidth);
+			const contentWidth = Math.max(1, width - prefixWidth);
+			const wrappedContent = wrapPlain(content, contentWidth);
+			return wrappedContent.map((line, index) => `${index === 0 ? prefix : continuationPrefix}${style(line)}`);
+		};
+		const linesForCommand = (item: BashCommandRisk, width: number) => {
+			const prefix = item.harmless ? "✅ " : "⚠️ ";
 			const splitter = item.splitter ? `${item.splitter} ` : "";
-			const text = `${prefix} ${splitter}${item.command}`;
-			return item.harmless ? text : `${prefix} ${theme.fg("warning", theme.bold(`${splitter}${item.command}`))}`;
+			const text = `${splitter}${item.command}`;
+			return item.harmless
+				? wrapPrefixed(prefix, text, width)
+				: wrapPrefixed(prefix, text, width, (value) => theme.fg("warning", theme.bold(value)));
 		};
 
 		return {
@@ -640,19 +660,23 @@ async function selectBashDecision(ctx: any, command: string, analysis: BashAnaly
 				const boxWidth = Math.max(24, width - 12);
 				const innerWidth = Math.max(1, boxWidth - 4);
 				const border = (left: string, fill: string, right: string) => theme.fg("borderAccent", `${left}${fill.repeat(innerWidth + 2)}${right}`);
-				const boxed = (line: string) => theme.fg("borderAccent", "│ ") + pad(truncate(line, innerWidth), innerWidth) + theme.fg("borderAccent", " │");
+				const divider = theme.fg("borderAccent", "─".repeat(innerWidth));
+				const boxed = (line: string) => theme.fg("borderAccent", "│ ") + pad(line, innerWidth) + theme.fg("borderAccent", " │");
 				const lines = [
 					theme.fg("accent", theme.bold("Allow bash command?")),
 					"",
-					command,
+					theme.fg("accent", "Command:"),
+					...wrapPlain(command, innerWidth),
 					"",
 					theme.fg("accent", "Command risk analysis:"),
-					...(analysis.commands.length === 0 ? ["✅ No executable commands detected"] : analysis.commands.map(lineForCommand)),
-					...(analysis.parserAvailable || !analysis.error ? [] : [`⚠️ ${theme.fg("warning", theme.bold(`Parser error: ${analysis.error}`))}`]),
+					...(analysis.commands.length === 0 ? ["✅ No executable commands detected"] : analysis.commands.flatMap((item) => linesForCommand(item, innerWidth))),
+					...(analysis.parserAvailable || !analysis.error
+						? []
+						: ["", divider, ...wrapPrefixed("⚠️ Parser error: ", analysis.error, innerWidth, (value) => theme.fg("warning", theme.bold(value)))]),
 					"",
-					...choices.map((choice, index) => `${index === selected ? "→" : " "} ${choice}`),
+					...choices.flatMap((choice, index) => wrapPrefixed(`${index === selected ? "→" : " "} `, choice, innerWidth)),
 					"",
-					theme.fg("dim", "↑↓ navigate   enter select   escape/ctrl+c cancel"),
+					...wrapPrefixed("", "↑↓ navigate   enter select   escape/ctrl+c cancel", innerWidth, (value) => theme.fg("dim", value)),
 				];
 				return [border("╭", "─", "╮"), ...lines.map(boxed), border("╰", "─", "╯")];
 			},

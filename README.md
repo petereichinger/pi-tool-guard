@@ -76,7 +76,7 @@ Use the optional scope argument to persist rules:
 
 If you are not inside a Git repository, repo scope is unavailable.
 
-The bash confirmation dialog can also save allow rules for the current directory or current repo.
+The bash confirmation dialog can also save allow rules for any available scope: session, directory, repo, or global.
 
 ### Listing and clearing rules
 
@@ -113,16 +113,11 @@ Agent bash tool calls are parsed with Tree-sitter, so compound lines such as `ls
 
 Known read-only commands such as `ls`, `cat`, `grep`, `rg`, safe `find`, safe `sed`, and read-only `git` subcommands are treated as harmless unless they write through shell redirection. Unknown commands and known mutating patterns are treated as potentially harmful.
 
-When a potentially harmful agent bash tool call is requested, the dialog shows the full command without truncation, shows each command part, and separates parser errors with a divider instead of folding them into the command list. It lets you:
+When a potentially harmful agent bash tool call is requested, the dialog shows the full command without truncation, shows each command part, and separates parser errors with a divider instead of folding them into the command list. It uses a two-stage flow:
 
-- Allow once
-- Block
-- Allow the exact command for this session
-- Allow the exact command for this directory
-- Allow the exact command for this repo
-- Add a regex allow rule for this session
-- Add a regex allow rule for this directory
-- Add a regex allow rule for this repo
+- Stage 1: Allow once, Deny, or Save allow rule
+- Stage 2: choose scope (`session`, `directory`, `repo`, or `global`) and whether to save an exact command or a regex rule
+- If you choose regex, it then prompts for the regex text
 
 ## Important caveats
 

@@ -67,6 +67,11 @@ type BashAnalysis = {
 	commands: BashCommandRisk[];
 	error?: string;
 };
+type BashSaveMode = "exact" | "regex";
+type BashDialogDecision =
+	| { type: "allow-once" }
+	| { type: "block" }
+	| { type: "save"; scope: BashRuleScope; mode: BashSaveMode };
 
 const SESSION_RULES_ENTRY_TYPE = "simple-permissions-session-rules";
 const WRITING_TOOLS = new Set(["write", "edit"]);
@@ -638,20 +643,20 @@ function formatBashAnalysis(analysis: BashAnalysis): string {
 	return lines.join("\n");
 }
 
-async function selectBashDecision(ctx: any, command: string, analysis: BashAnalysis, config: LoadedConfigState): Promise<string | undefined> {
-	const choices = [
-		"Allow once",
-		"Block",
-		"Allow exact command for this session",
-		"Allow exact command for this directory",
-		...(config.repoLocation ? ["Allow exact command for this repo"] : []),
-		"Add regex allow rule for this session...",
-		"Add regex allow rule for this directory...",
-		...(config.repoLocation ? ["Add regex allow rule for this repo..."] : []),
-	];
+async function selectBashDecision(
+	ctx: any,
+	command: string,
+	analysis: BashAnalysis,
+	config: LoadedConfigState,
+): Promise<BashDialogDecision | undefined> {
+	const actionChoices = ["Allow once", "Deny", "Save allow rule…"];
+	const scopeChoices: BashRuleScope[] = ["session", "directory", ...(config.repoLocation ? (["repo"] as const) : []), "global"];
 
-	return ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: string | undefined) => void) => {
-		let selected = 0;
+	return ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: BashDialogDecision | undefined) => void) => {
+		let stage: "action" | "save" = "action";
+		let actionSelected = 0;
+		let scopeSelected = 0;
+		let saveMode: BashSaveMode = "exact";
 		const ansiPattern = /^\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|[PX^_].*?\x1b\\|.)/;
 		const charWidth = (char: string) => {
 			const code = char.codePointAt(0) ?? 0;
@@ -733,16 +738,48 @@ async function selectBashDecision(ctx: any, command: string, analysis: BashAnaly
 				? wrapPrefixed(prefix, text, width)
 				: wrapPrefixed(prefix, text, width, (value) => theme.fg("warning", theme.bold(value)));
 		};
+		const scopeLabel = (scope: BashRuleScope) => `${scope[0]!.toUpperCase()}${scope.slice(1)}`;
+		const modeLabel = (mode: BashSaveMode, label: string) => {
+			const active = saveMode === mode;
+			const prefix = active ? "◉ " : "○ ";
+			const text = `${prefix}${label}`;
+			return active ? theme.fg("accent", text) : theme.fg("muted", text);
+		};
 
 		return {
 			render: (width: number) => {
-				// Leave a generous safety margin because terminal emoji width can vary
-				// between fonts/platforms; otherwise side borders can wrap/clobber.
 				const boxWidth = Math.max(24, width - 12);
 				const innerWidth = Math.max(1, boxWidth - 4);
 				const border = (left: string, fill: string, right: string) => theme.fg("borderAccent", `${left}${fill.repeat(innerWidth + 2)}${right}`);
 				const divider = theme.fg("borderAccent", "─".repeat(innerWidth));
 				const boxed = (line: string) => theme.fg("borderAccent", "│ ") + pad(line, innerWidth) + theme.fg("borderAccent", " │");
+				const stageLines =
+					stage === "action"
+						? [
+							...actionChoices.flatMap((choice, index) => wrapPrefixed(`${index === actionSelected ? "→" : " "} `, choice, innerWidth)),
+							"",
+							...wrapPrefixed("", "↑↓ navigate   enter select   escape/ctrl+c cancel", innerWidth, (value) => theme.fg("dim", value)),
+						]
+						: [
+							theme.fg("accent", theme.bold("Save allow rule")),
+							...wrapPrefixed("", "Tab or ←→ switches between exact and regex. ↑↓ chooses scope.", innerWidth, (value) => theme.fg("dim", value)),
+							"",
+							theme.fg("accent", "Mode:"),
+							`  ${modeLabel("exact", "Exact command")}`,
+							`  ${modeLabel("regex", "Regex rule")}`,
+							"",
+							theme.fg("accent", "Scope:"),
+							...scopeChoices.flatMap((scope, index) =>
+								wrapPrefixed(
+									`${index === scopeSelected ? "→" : " "} `,
+									scopeLabel(scope),
+									innerWidth,
+									(value) => (index === scopeSelected ? theme.fg("accent", value) : value),
+								),
+							),
+							"",
+							...wrapPrefixed("", "enter save   escape back   ctrl+c cancel", innerWidth, (value) => theme.fg("dim", value)),
+						];
 				const lines = [
 					theme.fg("accent", theme.bold("Allow bash command?")),
 					"",
@@ -755,17 +792,30 @@ async function selectBashDecision(ctx: any, command: string, analysis: BashAnaly
 						? []
 						: ["", divider, ...wrapPrefixed("⚠️ Parser error: ", analysis.error, innerWidth, (value) => theme.fg("warning", theme.bold(value)))]),
 					"",
-					...choices.flatMap((choice, index) => wrapPrefixed(`${index === selected ? "→" : " "} `, choice, innerWidth)),
-					"",
-					...wrapPrefixed("", "↑↓ navigate   enter select   escape/ctrl+c cancel", innerWidth, (value) => theme.fg("dim", value)),
+					...stageLines,
 				];
 				return [border("╭", "─", "╮"), ...lines.map(boxed), border("╰", "─", "╯")];
 			},
 			handleInput: (data: string) => {
-				if (data === "\x1b[A") selected = Math.max(0, selected - 1);
-				else if (data === "\x1b[B") selected = Math.min(choices.length - 1, selected + 1);
-				else if (data === "\r" || data === "\n") return done(choices[selected]);
-				else if (data === "\x1b" || data === "\x03") return done(undefined);
+				if (stage === "action") {
+					if (data === "\x1b[A") actionSelected = Math.max(0, actionSelected - 1);
+					else if (data === "\x1b[B") actionSelected = Math.min(actionChoices.length - 1, actionSelected + 1);
+					else if (data === "\r" || data === "\n") {
+						if (actionSelected === 0) return done({ type: "allow-once" });
+						if (actionSelected === 1) return done({ type: "block" });
+						stage = "save";
+					} else if (data === "\x1b" || data === "\x03") return done(undefined);
+					tui.requestRender();
+					return;
+				}
+
+				if (data === "\x1b[A") scopeSelected = Math.max(0, scopeSelected - 1);
+				else if (data === "\x1b[B") scopeSelected = Math.min(scopeChoices.length - 1, scopeSelected + 1);
+				else if (data === "\t" || data === "\x1b[C" || data === "\x1b[D" || data === "\x1b[Z") {
+					saveMode = saveMode === "exact" ? "regex" : "exact";
+				} else if (data === "\r" || data === "\n") return done({ type: "save", scope: scopeChoices[scopeSelected]!, mode: saveMode });
+				else if (data === "\x1b") stage = "action";
+				else if (data === "\x03") return done(undefined);
 				tui.requestRender();
 			},
 			invalidate: () => {},
@@ -794,64 +844,50 @@ async function confirmBash(
 		} as const;
 	}
 
-	const choice = await selectBashDecision(ctx, command, analysis, config);
+	const decision = await selectBashDecision(ctx, command, analysis, config);
 
-	if (choice === "Allow once") return undefined;
+	if (!decision || decision.type === "block") return { block: true, reason: "Blocked by user" } as const;
+	if (decision.type === "allow-once") return undefined;
 
-	if (choice === "Allow exact command for this session") {
-		addExactRule(command, bashAllowRules, "session", "allow");
-		onSessionRulesChanged();
-		ctx.ui.notify("Added exact bash allow rule for this session.", "info");
-		return undefined;
-	}
+	if (decision.mode === "exact") {
+		if (decision.scope === "session") {
+			addExactRule(command, bashAllowRules, "session", "allow");
+			onSessionRulesChanged();
+			ctx.ui.notify("Added exact bash allow rule for this session.", "info");
+			return undefined;
+		}
 
-	if (choice === "Allow exact command for this directory" || choice === "Allow exact command for this repo") {
-		const scope = choice === "Allow exact command for this repo" ? "repo" : "directory";
 		try {
-			await addPersistentRule(ctx, scope, "allow", exactRuleSource(command));
-			ctx.ui.notify(`Added exact bash allow rule for this ${scope}.`, "info");
+			await addPersistentRule(ctx, decision.scope, "allow", exactRuleSource(command));
+			ctx.ui.notify(`Added exact bash allow rule for this ${decision.scope}.`, "info");
 			return undefined;
 		} catch (error: any) {
-			ctx.ui.notify(`Could not save ${scope} rule: ${error.message}`, "error");
-			return { block: true, reason: `Could not save ${scope} rule: ${error.message}` } as const;
+			ctx.ui.notify(`Could not save ${decision.scope} rule: ${error.message}`, "error");
+			return { block: true, reason: `Could not save ${decision.scope} rule: ${error.message}` } as const;
 		}
 	}
 
-	if (
-		choice === "Add regex allow rule for this session..." ||
-		choice === "Add regex allow rule for this directory..." ||
-		choice === "Add regex allow rule for this repo..."
-	) {
-		const persistentScope =
-			choice === "Add regex allow rule for this directory..."
-				? "directory"
-				: choice === "Add regex allow rule for this repo..."
-					? "repo"
-					: undefined;
-		const source = await ctx.ui.input("Bash allow regex", "Example: ^ssh\\b");
-		if (!source) return { block: true, reason: "Blocked by user" } as const;
+	const source = await ctx.ui.input("Bash allow regex", "Example: ^ssh\\b");
+	if (!source) return { block: true, reason: "Blocked by user" } as const;
 
-		try {
-			const regex = new RegExp(source);
-			if (persistentScope) {
-				await addPersistentRule(ctx, persistentScope, "allow", source);
-				ctx.ui.notify(`Added ${persistentScope} bash allow rule: /${source}/`, "info");
-			} else {
-				bashAllowRules.push({ source, regex, scope: "session", list: "allow" });
-				onSessionRulesChanged();
-				ctx.ui.notify(`Added session bash allow rule: /${source}/`, "info");
-			}
-
-			regex.lastIndex = 0;
-			if (regex.test(command)) return undefined;
-			return { block: true, reason: `Added regex /${source}/ does not match this command` } as const;
-		} catch (error: any) {
-			ctx.ui.notify(`Invalid regex: ${error.message}`, "error");
-			return { block: true, reason: `Invalid regex: ${error.message}` } as const;
+	try {
+		const regex = new RegExp(source);
+		if (decision.scope === "session") {
+			bashAllowRules.push({ source, regex, scope: "session", list: "allow" });
+			onSessionRulesChanged();
+			ctx.ui.notify(`Added session bash allow rule: /${source}/`, "info");
+		} else {
+			await addPersistentRule(ctx, decision.scope, "allow", source);
+			ctx.ui.notify(`Added ${decision.scope} bash allow rule: /${source}/`, "info");
 		}
-	}
 
-	return { block: true, reason: "Blocked by user" } as const;
+		regex.lastIndex = 0;
+		if (regex.test(command)) return undefined;
+		return { block: true, reason: `Added regex /${source}/ does not match this command` } as const;
+	} catch (error: any) {
+		ctx.ui.notify(`Invalid regex: ${error.message}`, "error");
+		return { block: true, reason: `Invalid regex: ${error.message}` } as const;
+	}
 }
 
 export default function simplePermissions(pi: ExtensionAPI) {

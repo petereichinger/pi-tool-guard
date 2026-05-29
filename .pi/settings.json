@@ -2,7 +2,7 @@
 	"packages": [
 		"..",
 		{
-			"source": "git:github.com/petereichinger/pi-simple-permissions",
+			"source": "git:github.com/petereichinger/pi-tool-guard",
 			"extensions": []
 		}
 	]

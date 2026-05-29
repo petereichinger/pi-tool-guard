@@ -1,7 +1,6 @@
 import { lstat, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // tree-sitter and tree-sitter-bash are CommonJS packages without consistently
 // available TS declarations in extension runtimes, so load them lazily via
@@ -203,8 +202,7 @@ function matchingBashRule(command: string, rules: BashRule[]): BashRule | undefi
 }
 
 function getGlobalConfigPath(): string {
-	const base = process.env.XDG_CONFIG_HOME ? resolve(process.env.XDG_CONFIG_HOME) : join(homedir(), ".config");
-	return join(base, "pi-simple-permissions", "config.json");
+	return join(getAgentDir(), "extensions", "simple-permissions.json");
 }
 
 function getDirectoryConfigPath(cwd: string): string {

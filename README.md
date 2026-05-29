@@ -61,7 +61,7 @@ Examples:
 
 ### Persistent session, directory, repo, and global rules
 
-Session rules are saved as custom entries in the current pi session file. Directory rules are saved in `.pi/simple-permissions.json` under the current pi working directory. Repo rules are saved in the Git common dir as `pi-simple-permissions.json`, which means they are shared by all worktrees of the same repository. In the main worktree that is usually `.git/pi-simple-permissions.json`. Global rules are saved in `$XDG_CONFIG_HOME/pi-simple-permissions/config.json`, or `~/.config/pi-simple-permissions/config.json` when `XDG_CONFIG_HOME` is not set.
+Session rules are saved as custom entries in the current pi session file. Directory rules are saved in `.pi/simple-permissions.json` under the current pi working directory. Repo rules are saved in the Git common dir as `pi-simple-permissions.json`, which means they are shared by all worktrees of the same repository. In the main worktree that is usually `.git/pi-simple-permissions.json`. Global rules are saved in `~/.pi/agent/extensions/simple-permissions.json`, or under the directory pointed to by `PI_CODING_AGENT_DIR` when that environment variable is set.
 
 Use the optional scope argument to persist rules:
 

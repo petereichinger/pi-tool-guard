@@ -643,7 +643,6 @@ function formatBashAnalysis(analysis: BashAnalysis): string {
 
 async function selectBashDecision(
 	ctx: any,
-	command: string,
 	analysis: BashAnalysis,
 	config: LoadedConfigState,
 ): Promise<BashDialogDecision | undefined> {
@@ -743,6 +742,28 @@ async function selectBashDecision(
 			const text = `${prefix}${label}`;
 			return active ? theme.fg("accent", text) : theme.fg("muted", text);
 		};
+		const wrapInlineChoices = (choices: string[], selectedIndex: number, width: number) => {
+			const lines: string[] = [];
+			let current = "";
+			let currentWidth = 0;
+			for (const [index, choice] of choices.entries()) {
+				const plain = index === selectedIndex ? `[${choice}]` : choice;
+				const rendered =
+					index === selectedIndex ? theme.fg("accent", theme.bold(plain)) : theme.fg("muted", plain);
+				const separator = current.length === 0 ? "" : "  ";
+				const nextWidth = currentWidth + (separator ? visibleWidth(separator) : 0) + visibleWidth(plain);
+				if (current.length > 0 && nextWidth > width) {
+					lines.push(current);
+					current = rendered;
+					currentWidth = visibleWidth(plain);
+					continue;
+				}
+				current += `${separator}${rendered}`;
+				currentWidth = nextWidth;
+			}
+			if (current.length > 0) lines.push(current);
+			return lines;
+		};
 
 		return {
 			render: (width: number) => {
@@ -754,9 +775,9 @@ async function selectBashDecision(
 				const stageLines =
 					stage === "action"
 						? [
-							...actionChoices.flatMap((choice, index) => wrapPrefixed(`${index === actionSelected ? "→" : " "} `, choice, innerWidth)),
+							...wrapInlineChoices(actionChoices, actionSelected, innerWidth),
 							"",
-							...wrapPrefixed("", "↑↓ navigate   enter select   escape/ctrl+c cancel", innerWidth, (value) => theme.fg("dim", value)),
+							...wrapPrefixed("", "←→ or ↑↓ navigate   enter select   escape/ctrl+c cancel", innerWidth, (value) => theme.fg("dim", value)),
 						]
 						: [
 							theme.fg("accent", theme.bold("Save allow rule")),
@@ -780,15 +801,10 @@ async function selectBashDecision(
 						];
 				const lines = [
 					theme.fg("accent", theme.bold("Allow bash command?")),
-					"",
-					theme.fg("accent", "Command:"),
-					...wrapPlain(command, innerWidth),
-					"",
-					theme.fg("accent", "Command risk analysis:"),
 					...(analysis.commands.length === 0 ? ["✅ No executable commands detected"] : analysis.commands.flatMap((item) => linesForCommand(item, innerWidth))),
 					...(analysis.parserAvailable || !analysis.error
 						? []
-						: ["", divider, ...wrapPrefixed("⚠️ Parser error: ", analysis.error, innerWidth, (value) => theme.fg("warning", theme.bold(value)))]),
+						: [divider, ...wrapPrefixed("⚠️ Parser error: ", analysis.error, innerWidth, (value) => theme.fg("warning", theme.bold(value)))]),
 					"",
 					...stageLines,
 				];
@@ -796,8 +812,8 @@ async function selectBashDecision(
 			},
 			handleInput: (data: string) => {
 				if (stage === "action") {
-					if (data === "\x1b[A") actionSelected = Math.max(0, actionSelected - 1);
-					else if (data === "\x1b[B") actionSelected = Math.min(actionChoices.length - 1, actionSelected + 1);
+					if (data === "\x1b[A" || data === "\x1b[D") actionSelected = Math.max(0, actionSelected - 1);
+					else if (data === "\x1b[B" || data === "\x1b[C") actionSelected = Math.min(actionChoices.length - 1, actionSelected + 1);
 					else if (data === "\r" || data === "\n") {
 						if (actionSelected === 0) return done({ type: "allow-once" });
 						if (actionSelected === 1) return done({ type: "block" });
@@ -842,7 +858,7 @@ async function confirmBash(
 		} as const;
 	}
 
-	const decision = await selectBashDecision(ctx, command, analysis, config);
+	const decision = await selectBashDecision(ctx, analysis, config);
 
 	if (!decision || decision.type === "block") return { block: true, reason: "Blocked by user" } as const;
 	if (decision.type === "allow-once") return undefined;

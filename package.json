@@ -1,7 +1,7 @@
 {
   "name": "pi-simple-permissions",
-  "version": "0.3.2",
-  "description": "A simple permission gate extension for pi: free writes in CWD, confirm writes outside CWD, confirm bash.",
+  "version": "0.3.3",
+  "description": "A simple permission gate extension for pi: free writes in CWD, confirm writes outside CWD, confirm agent bash tool calls.",
   "private": false,
   "type": "module",
   "keywords": [

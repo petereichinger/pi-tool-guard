@@ -4,11 +4,11 @@ A small [pi](https://pi.dev) extension that adds a simple permission gate:
 
 - Files inside the current working directory can be read, written, edited, and created without prompting.
 - `write` / `edit` outside the current working directory require confirmation.
-- Agent bash commands are parsed with `tree-sitter-bash` and each individual command is labelled harmless or potentially harmful.
-- Fully harmless bash lines are allowed automatically.
-- Potentially harmful agent bash commands require confirmation, with the dialog showing which part is harmless and which part is not.
-- User `!` / `!!` bash commands use the same bash risk analysis.
-- Bash commands can be allowed or denied with regex rules at three levels: global config, directory config, and current session.
+- Agent bash tool calls are parsed with `tree-sitter-bash` and each individual command is labelled harmless or potentially harmful.
+- Fully harmless agent bash lines are allowed automatically.
+- Potentially harmful agent bash tool calls require confirmation, with the dialog showing which part is harmless and which part is not.
+- User-entered `!` / `!!` bash commands are not intercepted by this extension.
+- Agent bash tool calls can be allowed or denied with regex rules at three levels: global config, directory config, and current session.
 
 > This is a convenience guard, not a security sandbox. Pi extensions run with your full user permissions. For hard isolation, use OS permissions, containers, VMs, or sandboxing.
 
@@ -104,11 +104,11 @@ Deny rules win over allow rules. For allows, more-specific scopes are checked be
 
 ## Bash risk analysis and confirmation dialog
 
-Bash lines are parsed with Tree-sitter, so compound lines such as `ls && rm -rf tmp` or `git status | grep foo` are analyzed command-by-command instead of as one opaque string.
+Agent bash tool calls are parsed with Tree-sitter, so compound lines such as `ls && rm -rf tmp` or `git status | grep foo` are analyzed command-by-command instead of as one opaque string.
 
 Known read-only commands such as `ls`, `cat`, `grep`, `rg`, safe `find`, safe `sed`, and read-only `git` subcommands are treated as harmless unless they write through shell redirection. Unknown commands and known mutating patterns are treated as potentially harmful.
 
-When a potentially harmful bash command is requested, the dialog shows the full command without truncation, shows each command part, and separates parser errors with a divider instead of folding them into the command list. It lets you:
+When a potentially harmful agent bash tool call is requested, the dialog shows the full command without truncation, shows each command part, and separates parser errors with a divider instead of folding them into the command list. It lets you:
 
 - Allow once
 - Block
@@ -120,7 +120,7 @@ When a potentially harmful bash command is requested, the dialog shows the full 
 ## Important caveats
 
 - The policy's CWD is the directory where pi is running. If you start pi in `~/Projects`, then every project under `~/Projects` is considered inside CWD. Start pi inside a specific repo if you want narrower access.
-- Pi does not currently have a separate built-in delete-file tool. Deletes usually happen through `bash` (`rm`, etc.), so they are covered by the bash risk analysis and confirmation path rather than path-specific delete analysis.
+- Pi does not currently have a separate built-in delete-file tool. Agent deletes usually happen through the `bash` tool (`rm`, etc.), so they are covered by the bash risk analysis and confirmation path rather than path-specific delete analysis. Manually entered `!` / `!!` shell escapes are treated as direct user intent and are not gated by this extension.
 - `read`, `ls`, `grep`, and `find` are allowed anywhere by this extension. If you want read/list restrictions too, extend the policy to gate those tools.
 - Other custom extensions/tools may mutate files internally and bypass this policy. Only run trusted extensions.
 - Bash risk analysis is conservative, not a sandbox or proof of safety. Unknown commands are considered potentially harmful, while allow rules can bypass analysis.

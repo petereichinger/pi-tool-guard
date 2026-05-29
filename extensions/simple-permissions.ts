@@ -912,7 +912,7 @@ export default function simplePermissions(pi: ExtensionAPI) {
 		const config = await loadConfigs(ctx.cwd);
 		const warnings = [...sessionRuleErrors, ...config.errors];
 		if (ctx.hasUI) {
-			ctx.ui.setStatus("simple-permissions", ctx.ui.theme.fg("accent", "perm: cwd-write + bash-risk"));
+			ctx.ui.setStatus("simple-permissions", ctx.ui.theme.fg("accent", "perm: cwd-write + agent-bash-risk"));
 			if (warnings.length > 0) ctx.ui.notify(`simple-permissions warnings:\n${warnings.join("\n")}`, "warning");
 		}
 	});
@@ -920,7 +920,7 @@ export default function simplePermissions(pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event) => ({
 		systemPrompt:
 			event.systemPrompt +
-			"\n\nPermission policy active: read/list/search tools are allowed; write/edit targets inside the current working directory are allowed; write/edit targets outside the current working directory require user confirmation; bash commands are parsed with tree-sitter-bash and each simple command is classified as harmless or potentially harmful. Fully harmless bash lines are allowed automatically; potentially harmful bash lines require confirmation unless they match a session, directory, or global bash allow regex. Matching deny regexes override allows and block the bash command.",
+			"\n\nPermission policy active: read/list/search tools are allowed; write/edit targets inside the current working directory are allowed; write/edit targets outside the current working directory require user confirmation; agent bash tool calls are parsed with tree-sitter-bash and each simple command is classified as harmless or potentially harmful. Fully harmless bash lines are allowed automatically; potentially harmful agent bash tool calls require confirmation unless they match a session, directory, or global bash allow regex. Matching deny regexes override allows and block the bash tool call.",
 	}));
 
 	pi.on("tool_call", async (event, ctx) => {
@@ -947,33 +947,4 @@ export default function simplePermissions(pi: ExtensionAPI) {
 		return confirmFileMutation(ctx, event.toolName, inputPath, targetReal, cwdReal);
 	});
 
-	// Also gate user-typed ! / !! shell escapes. If you consider those already
-	// explicit user consent, remove this handler.
-	pi.on("user_bash", async (event, ctx) => {
-		const config = await loadConfigs(ctx.cwd);
-		const ruleDecision = bashRuleDecision(event.command, bashAllowRules, bashDenyRules, config);
-		if (ruleDecision?.type === "allow") return undefined;
-		if (ruleDecision?.type === "deny") {
-			return {
-				result: {
-					output: `Blocked by simple-permissions extension\nBash command denied by ${ruleLabel(ruleDecision.rule)}\n`,
-					exitCode: 1,
-					cancelled: false,
-					truncated: false,
-				},
-			};
-		}
-
-		const decision = await confirmBash(ctx, event.command, bashAllowRules, saveSessionRules);
-		if (!decision) return undefined;
-
-		return {
-			result: {
-				output: `Blocked by simple-permissions extension\n${decision.reason}\n`,
-				exitCode: 1,
-				cancelled: false,
-				truncated: false,
-			},
-		};
-	});
 }

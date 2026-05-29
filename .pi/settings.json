@@ -1,5 +1,9 @@
 {
-  "packages": [
-    ".."
-  ]
+	"packages": [
+		"..",
+		{
+			"source": "git:github.com/petereichinger/pi-simple-permissions",
+			"extensions": []
+		}
+	]
 }

@@ -124,7 +124,7 @@ const GIT_READ_ONLY_SUBCOMMANDS = new Set([
 	"remote",
 ]);
 const FIND_MUTATING_FLAGS = new Set(["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf"]);
-let bashParserPromise: Promise<any | null> | undefined;
+let bashParserPromise: Promise<{ parser: any | null; error?: string }> | undefined;
 let configCache: LoadedConfigState | undefined;
 let configLoadPromise: { cwd: string; promise: Promise<LoadedConfigState> } | undefined;
 
@@ -390,18 +390,24 @@ async function confirmFileMutation(ctx: any, toolName: string, requestedPath: st
 	return ok ? undefined : ({ block: true, reason: "Blocked by user" } as const);
 }
 
-async function getBashParser(): Promise<any | null> {
+async function getBashParser(): Promise<{ parser: any | null; error?: string }> {
 	bashParserPromise ??= (async () => {
 		try {
-			const ParserModule = await import("tree-sitter");
-			const BashModule = await import("tree-sitter-bash");
-			const Parser = (ParserModule as any).default ?? ParserModule;
-			const Bash = (BashModule as any).default ?? BashModule;
+			const ParserModule: any = await import("tree-sitter");
+			const BashModule: any = await import("tree-sitter-bash");
+			const Parser = ParserModule.default ?? ParserModule;
+			// Bun freezes ESM namespace objects. tree-sitter's setLanguage attaches
+			// state to the language module, which throws "Attempted to assign to
+			// readonly property" on a frozen namespace. Copy into a plain mutable
+			// object so the native binding can write to it.
+			const BashExports = BashModule.default ?? BashModule;
+			const Bash: any = {};
+			for (const key of Object.keys(BashExports)) Bash[key] = BashExports[key];
 			const parser = new Parser();
 			parser.setLanguage(Bash);
-			return parser;
-		} catch {
-			return null;
+			return { parser };
+		} catch (error: any) {
+			return { parser: null, error: error?.stack ?? error?.message ?? String(error) };
 		}
 	})();
 	return bashParserPromise;
@@ -509,11 +515,12 @@ function collectCommandNodes(node: any, output: any[]) {
 }
 
 async function analyzeBash(command: string): Promise<BashAnalysis> {
-	const parser = await getBashParser();
+	const { parser, error: loadError } = await getBashParser();
 	if (!parser) {
 		return {
 			parserAvailable: false,
-			commands: [{ command, name: "unknown", harmless: false, reason: "tree-sitter bash parser unavailable" }],
+			error: loadError,
+			commands: [{ command, name: "unknown", harmless: false, reason: `tree-sitter bash parser unavailable${loadError ? `: ${loadError.split("\n")[0]}` : ""}` }],
 		};
 	}
 

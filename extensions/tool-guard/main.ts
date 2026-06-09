@@ -6,6 +6,7 @@ import { WRITING_TOOLS, SESSION_RULES_ENTRY_TYPE } from "./constants.ts";
 import { addPersistentWriteDirectory, loadConfigs } from "./config-store.ts";
 import { canonicalizeForPolicy, isInside, realpathOrResolve, stripAtPrefix } from "./path-policy.ts";
 import { persistedSessionRules, loadSessionRules } from "./session-rules.ts";
+import { setupTerminalFocusTracking } from "./terminal-focus.ts";
 import { confirmFileMutation } from "./ui.ts";
 import type { BashRule, BashRuleScope, PersistentBashRuleScope } from "./types.ts";
 
@@ -47,6 +48,7 @@ export default function toolGuard(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		setupTerminalFocusTracking(ctx);
 		const session = loadSessionRules(ctx);
 		const writeAllowDirectoryRules = await Promise.all(
 			session.writeAllowDirectories.map((path) => canonicalizeForPolicy(resolve(ctx.cwd, stripAtPrefix(path)))),

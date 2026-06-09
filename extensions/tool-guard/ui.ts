@@ -1,4 +1,5 @@
 import { dirname, resolve } from "node:path";
+import { notifyGuardPrompt } from "./desktop-notify.ts";
 import { canonicalizeForPolicy, isInside, stripAtPrefix } from "./path-policy.ts";
 import { formatDisplayedBashCommand } from "./rule-utils.ts";
 import type {
@@ -264,6 +265,8 @@ export async function confirmFileMutation(
 ) {
 	if (!ctx.hasUI) return { block: true, reason: `Write/edit outside CWD blocked: ${targetReal}` } as const;
 
+	notifyGuardPrompt(`Write permission needed:\n${targetReal}`);
+
 	const targetDirectory = dirname(targetReal);
 	const actionChoices: InlineChoice<FileMutationDecision>[] = [
 		{ label: "Allow once", description: "Allow this file mutation one time.", value: { type: "allow-once" } },
@@ -380,6 +383,8 @@ export async function selectBashDecision(
 		{ label: "Save allow rule…", description: "Create an allow rule for the highlighted sub-command.", value: { type: "save", scope: "session", mode: "exact" } },
 	];
 	const scopeChoices: BashRuleScope[] = ["session", "directory", ...(config.repoLocation ? (["repo"] as const) : []), "global"];
+	const promptedCommand = evaluation.commands.find((item) => item.index === targetIndex);
+	notifyGuardPrompt(`Bash permission needed:\n${promptedCommand ? formatDisplayedBashCommand(promptedCommand) : "dangerous command"}`);
 
 	return ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: BashDialogDecision | undefined) => void) => {
 		let stage: "action" | "save" = initialStage;

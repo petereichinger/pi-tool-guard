@@ -11,6 +11,7 @@ A small [pi](https://pi.dev) extension that adds a tool guard:
 - User-entered `!` / `!!` bash commands are not intercepted by this extension.
 - Agent bash tool calls can be allowed or denied with regex rules at four levels: global config, repo config, directory config, and current session.
 - Write confirmations can allow the current operation once or add a scoped write-directory rule for the target file's folder or a custom path.
+- Guard prompts send a best-effort desktop notification when the pi terminal is not focused.
 
 > This is a convenience guard, not a security sandbox. Pi extensions run with your full user permissions. For hard isolation, use OS permissions, containers, VMs, or sandboxing.
 

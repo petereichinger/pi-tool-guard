@@ -2,7 +2,7 @@ import { addPersistentRule, loadConfigs } from "./config-store.ts";
 import { analyzeBash, formatBashAnalysis } from "./bash-analysis.ts";
 import { evaluateBashAnalysis } from "./bash-evaluation.ts";
 import { addExactRule, exactRuleSource, formatDisplayedBashCommand, ruleLabel } from "./rule-utils.ts";
-import { selectBashDecision } from "./ui.ts";
+import { editRegexRule, selectBashDecision } from "./ui.ts";
 import type { BashRule, LoadedConfigState } from "./types.ts";
 
 export async function confirmBash(
@@ -74,7 +74,7 @@ export async function confirmBash(
 			}
 		}
 
-		const source = await ctx.ui.input("Bash allow regex for sub-command", "Example: ^ssh\\b");
+		const source = (await editRegexRule(ctx, "Bash allow regex for sub-command", target.command, exactRuleSource(target.command)))?.trim();
 		if (!source) return { block: true, reason: "Blocked by user" } as const;
 
 		try {

@@ -138,7 +138,7 @@ When a potentially harmful agent bash tool call is requested, the dialog shows e
 - `Allow once` approves the whole bash command once
 - `Save allow rule` switches into per-sub-command rule-saving mode, highlighting one dangerous sub-command at a time
 - In that mode you choose scope (`session`, `directory`, `repo`, or `global`) and exact-vs-regex for the highlighted sub-command, then continue to the next remaining dangerous sub-command
-- If you choose regex, it then prompts for the regex text
+- If you choose regex, it opens a regex editor showing the current sub-command, prefilled with an exact-match regex, and shows whether the current regex is valid
 
 ## Important caveats
 

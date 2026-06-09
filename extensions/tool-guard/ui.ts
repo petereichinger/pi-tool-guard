@@ -147,12 +147,110 @@ function isNextKey(data: string) {
 	return data === "\x1b[B" || data === "\x1b[C";
 }
 
+function kittyCsiU(data: string): { codepoint: number; modifier: number } | undefined {
+	const match = data.match(/^\x1b\[(\d+)(?::\d*)?(?::\d+)?(?:;(\d+))?(?::\d+)?u$/);
+	if (!match) return undefined;
+	return { codepoint: Number(match[1]), modifier: (match[2] ? Number(match[2]) : 1) - 1 };
+}
+
+function modifyOtherKey(data: string): { codepoint: number; modifier: number } | undefined {
+	const match = data.match(/^\x1b\[27;(\d+);(\d+)~$/);
+	if (!match) return undefined;
+	return { codepoint: Number(match[2]), modifier: Number(match[1]) - 1 };
+}
+
+function hasCtrlModifier(modifier: number) {
+	return (modifier & 4) !== 0;
+}
+
 function isEnterKey(data: string) {
-	return data === "\r" || data === "\n";
+	const kitty = kittyCsiU(data);
+	return data === "\r" || data === "\n" || data === "\x1bOM" || (!!kitty && (kitty.codepoint === 13 || kitty.codepoint === 57414) && kitty.modifier === 0);
 }
 
 function isDenyKey(data: string) {
-	return data === "\x1b" || data === "\x03";
+	const kitty = kittyCsiU(data);
+	const modified = modifyOtherKey(data);
+	return data === "\x1b" ||
+		data === "\x03" ||
+		(!!kitty && kitty.codepoint === 27 && kitty.modifier === 0) ||
+		(!!kitty && kitty.codepoint === 3) ||
+		(!!kitty && (kitty.codepoint === 99 || kitty.codepoint === 67) && hasCtrlModifier(kitty.modifier)) ||
+		(!!modified && modified.codepoint === 27 && modified.modifier === 0) ||
+		(!!modified && modified.codepoint === 3) ||
+		(!!modified && (modified.codepoint === 99 || modified.codepoint === 67) && hasCtrlModifier(modified.modifier));
+}
+
+export async function editRegexRule(ctx: any, title: string, subCommand: string, initialValue: string): Promise<string | undefined> {
+	return ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: string | undefined) => void) => {
+		let value = initialValue;
+		let cursor = value.length;
+		let forceShowInvalid = false;
+		const validation = () => {
+			try {
+				new RegExp(value);
+				return { valid: true } as const;
+			} catch (error: any) {
+				return { valid: false, message: error.message } as const;
+			}
+		};
+		const moveLeft = () => {
+			cursor = Math.max(0, cursor - 1);
+		};
+		const moveRight = () => {
+			cursor = Math.min(value.length, cursor + 1);
+		};
+		const insert = (text: string) => {
+			value = `${value.slice(0, cursor)}${text}${value.slice(cursor)}`;
+			cursor += text.length;
+			forceShowInvalid = false;
+		};
+		const backspace = () => {
+			if (cursor === 0) return;
+			value = `${value.slice(0, cursor - 1)}${value.slice(cursor)}`;
+			cursor -= 1;
+			forceShowInvalid = false;
+		};
+		const deleteForward = () => {
+			if (cursor >= value.length) return;
+			value = `${value.slice(0, cursor)}${value.slice(cursor + 1)}`;
+			forceShowInvalid = false;
+		};
+
+		return {
+			render: (width: number) => {
+				const innerWidth = Math.max(1, width);
+				const status = validation();
+				const display = `${value.slice(0, cursor)}▌${value.slice(cursor)}`;
+				return [
+					theme.fg("accent", theme.bold(title)),
+					...wrapPrefixed("Command: ", subCommand, innerWidth),
+					"",
+					...wrapPrefixed("Regex: ", display, innerWidth),
+					...(status.valid
+						? [theme.fg("success", "✅ Valid regex")]
+						: wrapPrefixed("", `⚠️ Invalid regex: ${status.message}`, innerWidth, (line) => theme.fg(forceShowInvalid ? "error" : "warning", line))),
+					"",
+					...wrapPrefixed("", "enter save   escape/ctrl+c deny   ←→ move   backspace/delete edit", innerWidth, (line) => theme.fg("dim", line)),
+				];
+			},
+			handleInput: (data: string) => {
+				if (data === "\x1b[D") moveLeft();
+				else if (data === "\x1b[C") moveRight();
+				else if (data === "\x1b[H" || data === "\x01") cursor = 0;
+				else if (data === "\x1b[F" || data === "\x05") cursor = value.length;
+				else if (data === "\x7f" || data === "\b") backspace();
+				else if (data === "\x1b[3~") deleteForward();
+				else if (isEnterKey(data)) {
+					if (validation().valid) return done(value);
+					forceShowInvalid = true;
+				} else if (isDenyKey(data)) return done(undefined);
+				else if (data.length > 0 && !data.startsWith("\x1b")) insert(data);
+				tui.requestRender();
+			},
+			invalidate: () => {},
+		};
+	});
 }
 
 export async function confirmFileMutation(

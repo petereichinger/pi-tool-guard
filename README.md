@@ -3,13 +3,14 @@
 A small [pi](https://pi.dev) extension that adds a tool guard:
 
 - Files inside the current working directory can be read, written, edited, and created without prompting.
-- `write` / `edit` outside the current working directory require confirmation.
+- `write` / `edit` outside the current working directory require confirmation unless they are under a scoped write-directory allow rule.
 - Agent bash tool calls are parsed with `tree-sitter-bash` and each individual command is labelled harmless or potentially harmful.
 - Bash allow/deny rules apply to each parsed sub-command, not to the full bash line as one string.
 - Fully harmless agent bash lines are allowed automatically unless a deny rule matches one of their parsed sub-commands.
 - Potentially harmful sub-commands require confirmation, with the dialog showing which parts are harmless, already allowed, or still need approval.
 - User-entered `!` / `!!` bash commands are not intercepted by this extension.
 - Agent bash tool calls can be allowed or denied with regex rules at four levels: global config, repo config, directory config, and current session.
+- Write confirmations can allow the current operation once or add a scoped write-directory rule for the target file's folder or a custom path.
 
 > This is a convenience guard, not a security sandbox. Pi extensions run with your full user permissions. For hard isolation, use OS permissions, containers, VMs, or sandboxing.
 
@@ -64,7 +65,7 @@ Examples:
 
 ### Persistent session, directory, repo, and global rules
 
-Session rules are saved as custom entries in the current pi session file. Directory rules are saved in `.pi/tool-guard.json` under the current pi working directory. Repo rules are saved in the Git common dir as `pi-tool-guard.json`, which means they are shared by all worktrees of the same repository. In the main worktree that is usually `.git/pi-tool-guard.json`. Global rules are saved in `~/.pi/agent/extensions/tool-guard.json`, or under the directory pointed to by `PI_CODING_AGENT_DIR` when that environment variable is set. For compatibility, older `simple-permissions` config/session entries are still read.
+Session bash rules and session write-directory allows are saved as custom entries in the current pi session file. Directory-scoped rules are saved in `.pi/tool-guard.json` under the current pi working directory. Repo-scoped rules are saved in the Git common dir as `pi-tool-guard.json`, which means they are shared by all worktrees of the same repository. In the main worktree that is usually `.git/pi-tool-guard.json`. Global rules are saved in `~/.pi/agent/extensions/tool-guard.json`, or under the directory pointed to by `PI_CODING_AGENT_DIR` when that environment variable is set. For compatibility, older `simple-permissions` config/session entries are still read.
 
 Use the optional scope argument to persist rules:
 
@@ -85,14 +86,14 @@ The bash confirmation dialog can also save allow rules for each dangerous sub-co
 
 ```text
 /guard-list [all|session|directory|repo|global]
-/guard-clear [session|directory|repo|global] [all|allow|deny|number] [all|number]
+/guard-clear [session|directory|repo|global] [all|allow|deny|write|number] [all|number]
 ```
 
-For backwards compatibility, `/guard-clear 2` removes session allow rule #2. Persistent rules are cleared with commands such as `/guard-clear directory allow 2`, `/guard-clear repo allow all`, or `/guard-clear global deny all`.
+For backwards compatibility, `/guard-clear 2` removes session allow rule #2. Write-directory allows are cleared with `/guard-clear session write all`, `/guard-clear session write 1`, `/guard-clear directory write all`, or `/guard-clear global write 1`. Persistent bash rules are cleared with commands such as `/guard-clear directory allow 2`, `/guard-clear repo allow all`, or `/guard-clear global deny all`.
 
 ## Persistent config format
 
-Both persistent config files use the same JSON shape. Rules can be plain regex strings or objects with a `source` regex and optional `description`; exact-command commands store anchored escaped regexes. Each rule is matched against an individual parsed bash sub-command.
+Persistent config files use the same JSON shape. Bash rules can be plain regex strings or objects with a `source` regex and optional `description`; exact-command commands store anchored escaped regexes. Each bash rule is matched against an individual parsed bash sub-command. Write-directory rules can be plain path strings or objects with a `path` and optional `description`.
 
 ```json
 {
@@ -104,11 +105,26 @@ Both persistent config files use the same JSON shape. Rules can be plain regex s
     "deny": [
       { "source": "^sudo\\b", "description": "Never allow sudo here" }
     ]
+  },
+  "write": {
+    "allowDirectories": [
+      { "path": "/tmp/my-agent-output", "description": "Scratch output" }
+    ]
   }
 }
 ```
 
-Deny rules win over allow rules. For allows, more-specific scopes are checked before broader scopes: session, directory, repo, then global. Matching happens per parsed sub-command.
+Bash deny rules win over allow rules. For bash allows, more-specific scopes are checked before broader scopes: session, directory, repo, then global. Matching happens per parsed sub-command. Write-directory allows apply to writes at or under the configured path.
+
+## Write confirmation dialog
+
+When a write/edit outside the current working directory is requested, the dialog uses a two-stage flow:
+
+- Stage 1: `Allow once`, `Deny`, or `Add rule`
+- `Add rule` switches into rule-saving mode
+- In that mode you choose scope (`session`, `directory`, `repo`, or `global`) and folder-vs-custom path, then save
+- `Folder of this file` allows the target file's containing folder
+- `Custom path` prompts for a path and only saves it if it contains the requested target
 
 ## Bash risk analysis and confirmation dialog
 

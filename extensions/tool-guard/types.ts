@@ -11,12 +11,22 @@ export type BashRule = {
 };
 
 export type StoredBashRule = string | { source?: unknown; description?: unknown };
+export type StoredWriteDirectoryRule = string | { path?: unknown; description?: unknown };
+
+export type WriteDirectoryRule = {
+	path: string;
+	scope: BashRuleScope;
+	description?: string;
+};
 
 export type PermissionConfig = {
 	version?: number;
 	bash?: {
 		allow?: StoredBashRule[];
 		deny?: StoredBashRule[];
+	};
+	write?: {
+		allowDirectories?: StoredWriteDirectoryRule[];
 	};
 	bashAllowRules?: StoredBashRule[];
 };
@@ -33,6 +43,7 @@ export type LoadedConfigFile = {
 	config: PermissionConfig;
 	allowRules: BashRule[];
 	denyRules: BashRule[];
+	writeAllowDirectories: WriteDirectoryRule[];
 	errors: string[];
 };
 
@@ -44,12 +55,14 @@ export type LoadedConfigState = {
 	repoLocation?: RepoConfigLocation;
 	allowRules: BashRule[];
 	denyRules: BashRule[];
+	writeAllowDirectories: WriteDirectoryRule[];
 	errors: string[];
 };
 
 export type LoadedSessionRuleState = {
 	allowRules: BashRule[];
 	denyRules: BashRule[];
+	writeAllowDirectories: string[];
 	errors: string[];
 };
 
@@ -87,3 +100,10 @@ export type BashDialogDecision =
 	| { type: "allow-once" }
 	| { type: "block" }
 	| { type: "save"; scope: BashRuleScope; mode: BashSaveMode };
+
+export type FileMutationSaveMode = "folder" | "custom";
+
+export type FileMutationDecision =
+	| { type: "allow-once" }
+	| { type: "block" }
+	| { type: "save"; scope: BashRuleScope; mode: FileMutationSaveMode };

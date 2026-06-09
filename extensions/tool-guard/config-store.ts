@@ -1,7 +1,7 @@
 import { lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { realpathOrResolve } from "./path-policy.ts";
+import { canonicalizeForPolicy, realpathOrResolve, stripAtPrefix } from "./path-policy.ts";
 import type {
 	BashRule,
 	BashRuleList,
@@ -12,6 +12,8 @@ import type {
 	PersistentBashRuleScope,
 	RepoConfigLocation,
 	StoredBashRule,
+	StoredWriteDirectoryRule,
+	WriteDirectoryRule,
 } from "./types.ts";
 
 let configCache: LoadedConfigState | undefined;
@@ -98,7 +100,7 @@ async function loadRepoConfigLocation(cwd: string): Promise<{ location?: RepoCon
 }
 
 function defaultConfig(): PermissionConfig {
-	return { version: 1, bash: { allow: [], deny: [] } };
+	return { version: 1, bash: { allow: [], deny: [] }, write: { allowDirectories: [] } };
 }
 
 function normalizeConfig(value: unknown): PermissionConfig {
@@ -107,6 +109,8 @@ function normalizeConfig(value: unknown): PermissionConfig {
 	config.bash = config.bash && typeof config.bash === "object" && !Array.isArray(config.bash) ? config.bash : {};
 	config.bash.allow = Array.isArray(config.bash.allow) ? config.bash.allow : [];
 	config.bash.deny = Array.isArray(config.bash.deny) ? config.bash.deny : [];
+	config.write = config.write && typeof config.write === "object" && !Array.isArray(config.write) ? config.write : {};
+	config.write.allowDirectories = Array.isArray(config.write.allowDirectories) ? config.write.allowDirectories : [];
 	if (Array.isArray(config.bashAllowRules) && config.bash.allow.length === 0) {
 		config.bash.allow = config.bashAllowRules;
 	}
@@ -118,6 +122,15 @@ function storedRuleSource(entry: StoredBashRule): { source?: string; description
 	if (!entry || typeof entry !== "object" || Array.isArray(entry)) return {};
 	return {
 		source: typeof entry.source === "string" ? entry.source : undefined,
+		description: typeof entry.description === "string" ? entry.description : undefined,
+	};
+}
+
+function storedWriteDirectoryPath(entry: StoredWriteDirectoryRule): { path?: string; description?: string } {
+	if (typeof entry === "string") return { path: entry };
+	if (!entry || typeof entry !== "object" || Array.isArray(entry)) return {};
+	return {
+		path: typeof entry.path === "string" ? entry.path : undefined,
 		description: typeof entry.description === "string" ? entry.description : undefined,
 	};
 }
@@ -145,6 +158,29 @@ function compileStoredRules(
 	return { rules, errors };
 }
 
+async function compileStoredWriteDirectories(
+	entries: StoredWriteDirectoryRule[] | undefined,
+	scope: PersistentBashRuleScope,
+	path: string,
+): Promise<{ rules: WriteDirectoryRule[]; errors: string[] }> {
+	const rules: WriteDirectoryRule[] = [];
+	const errors: string[] = [];
+	for (const [index, entry] of (entries ?? []).entries()) {
+		const { path: sourcePath, description } = storedWriteDirectoryPath(entry);
+		if (!sourcePath) {
+			errors.push(`${path}: ignored ${scope} write allow directory #${index + 1}: missing string path`);
+			continue;
+		}
+		try {
+			const absolutePath = resolve(dirname(path), stripAtPrefix(sourcePath));
+			rules.push({ path: await canonicalizeForPolicy(absolutePath), scope, description });
+		} catch (error: any) {
+			errors.push(`${path}: ignored ${scope} write allow directory #${index + 1} ${sourcePath}: ${error.message}`);
+		}
+	}
+	return { rules, errors };
+}
+
 async function loadConfigFile(pathOrPaths: string | string[], scope: PersistentBashRuleScope): Promise<LoadedConfigFile> {
 	const candidatePaths = Array.isArray(pathOrPaths) ? pathOrPaths : [pathOrPaths];
 	let parsed: unknown = defaultConfig();
@@ -167,13 +203,15 @@ async function loadConfigFile(pathOrPaths: string | string[], scope: PersistentB
 	const config = normalizeConfig(parsed);
 	const allow = compileStoredRules(config.bash?.allow, scope, "allow", loadedPath);
 	const deny = compileStoredRules(config.bash?.deny, scope, "deny", loadedPath);
+	const writeAllowDirectories = await compileStoredWriteDirectories(config.write?.allowDirectories, scope, loadedPath);
 	return {
 		path: loadedPath,
 		scope,
 		config,
 		allowRules: allow.rules,
 		denyRules: deny.rules,
-		errors: [...errors, ...allow.errors, ...deny.errors],
+		writeAllowDirectories: writeAllowDirectories.rules,
+		errors: [...errors, ...allow.errors, ...deny.errors, ...writeAllowDirectories.errors],
 	};
 }
 
@@ -197,6 +235,11 @@ export async function loadConfigs(cwd: string): Promise<LoadedConfigState> {
 			repoLocation: repoLocationResult.location,
 			allowRules: [...directoryConfig.allowRules, ...(repoConfig?.allowRules ?? []), ...globalConfig.allowRules],
 			denyRules: [...directoryConfig.denyRules, ...(repoConfig?.denyRules ?? []), ...globalConfig.denyRules],
+			writeAllowDirectories: [
+				...directoryConfig.writeAllowDirectories,
+				...(repoConfig?.writeAllowDirectories ?? []),
+				...globalConfig.writeAllowDirectories,
+			],
 			errors: [...globalConfig.errors, ...directoryConfig.errors, ...repoLocationResult.errors, ...(repoConfig?.errors ?? [])],
 		};
 		configCache = state;
@@ -242,6 +285,16 @@ export async function addPersistentRule(ctx: any, scope: PersistentBashRuleScope
 	invalidateConfigCache();
 }
 
+export async function addPersistentWriteDirectory(ctx: any, scope: PersistentBashRuleScope, directory: string) {
+	const path = await resolvePersistentConfigPath(ctx, scope);
+	const file = await loadConfigFile(path, scope);
+	file.config.write ??= { allowDirectories: [] };
+	file.config.write.allowDirectories ??= [];
+	file.config.write.allowDirectories.push({ path: directory });
+	await saveConfigFile(path, file.config);
+	invalidateConfigCache();
+}
+
 export async function clearPersistentRule(ctx: any, scope: PersistentBashRuleScope, list: BashRuleList, target: string) {
 	const path = await resolvePersistentConfigPath(ctx, scope);
 	const file = await loadConfigFile(path, scope);
@@ -255,6 +308,25 @@ export async function clearPersistentRule(ctx: any, scope: PersistentBashRuleSco
 		const index = Number(target) - 1;
 		if (!Number.isInteger(index) || index < 0 || index >= rules.length) {
 			throw new Error(`No ${scope} ${list} rule #${target}`);
+		}
+		rules.splice(index, 1);
+	}
+	await saveConfigFile(path, file.config);
+	invalidateConfigCache();
+}
+
+export async function clearPersistentWriteDirectory(ctx: any, scope: PersistentBashRuleScope, target: string) {
+	const path = await resolvePersistentConfigPath(ctx, scope);
+	const file = await loadConfigFile(path, scope);
+	file.config.write ??= { allowDirectories: [] };
+	file.config.write.allowDirectories ??= [];
+	const rules = file.config.write.allowDirectories;
+	if (target === "all") {
+		rules.splice(0, rules.length);
+	} else {
+		const index = Number(target) - 1;
+		if (!Number.isInteger(index) || index < 0 || index >= rules.length) {
+			throw new Error(`No ${scope} write rule #${target}`);
 		}
 		rules.splice(index, 1);
 	}

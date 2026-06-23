@@ -131,7 +131,7 @@ When a write/edit outside the current working directory is requested, the dialog
 
 Agent bash tool calls are parsed with Tree-sitter, so compound lines such as `ls && rm -rf tmp` or `git status | grep foo` are analyzed command-by-command instead of as one opaque string.
 
-Known read-only commands such as `ls`, `cat`, `grep`, `rg`, safe `find`, safe `sed`, and read-only `git` subcommands are treated as harmless unless they write through shell redirection. Unknown commands and known mutating patterns are treated as potentially harmful.
+Known read-only commands such as `ls`, `cat`, `grep`, `rg`, safe `fd`, safe `find`, safe `sed`, and read-only `git` subcommands are treated as harmless unless they write through shell redirection. `fd`/`fdfind` calls that use exec actions (`-x`/`--exec` or `-X`/`--exec-batch`) are treated as potentially harmful. Unknown commands and known mutating patterns are treated as potentially harmful.
 
 When a potentially harmful agent bash tool call is requested, the dialog shows each analyzed command part and separates parser errors with a divider instead of folding them into the command list. Rule saving happens per dangerous parsed sub-command: if some dangerous parts are already allowed by rules, only the remaining dangerous parts are prompted for. For each prompted sub-command, the dialog uses a two-stage flow:
 
@@ -145,7 +145,7 @@ When a potentially harmful agent bash tool call is requested, the dialog shows e
 
 - The policy's CWD is the directory where pi is running. If you start pi in `~/Projects`, then every project under `~/Projects` is considered inside CWD. Start pi inside a specific repo if you want narrower access.
 - Pi does not currently have a separate built-in delete-file tool. Agent deletes usually happen through the `bash` tool (`rm`, etc.), so they are covered by the bash risk analysis and confirmation path rather than path-specific delete analysis. Manually entered `!` / `!!` shell escapes are treated as direct user intent and are not gated by this extension.
-- `read`, `ls`, `grep`, and `find` are allowed anywhere by this extension. If you want read/list restrictions too, extend the policy to gate those tools.
+- `read`, `ls`, `grep`, `rg`, safe `fd`, and safe `find` are allowed anywhere by this extension. If you want read/list restrictions too, extend the policy to gate those tools.
 - Other custom extensions/tools may mutate files internally and bypass this policy. Only run trusted extensions.
 - Bash risk analysis is conservative, not a sandbox or proof of safety. Unknown commands are considered potentially harmful, while allow rules can bypass analysis.
 - Regex allow rules are powerful. For example, `/guard-allow ^ssh\b` allows any parsed bash sub-command beginning with `ssh` for the current pi session, including inside compound lines and after `/reload` or resuming that session.

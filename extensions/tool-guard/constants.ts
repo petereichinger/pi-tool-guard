@@ -26,6 +26,8 @@ export const READ_ONLY_COMMANDS = new Set([
 	"fgrep",
 	"rg",
 	"ag",
+	"fd",
+	"fdfind",
 	"awk",
 	"sed",
 	"find",
@@ -74,6 +76,19 @@ export const FIND_MUTATING_FLAGS = new Set([
 	"-fprint",
 	"-fprint0",
 	"-fprintf",
+]);
+
+export const FD_EXEC_FLAGS = new Set(["-x", "-X", "--exec", "--exec-batch"]);
+
+export const FD_SHORT_OPTIONS_WITH_VALUES = new Set([
+	"t",
+	"e",
+	"E",
+	"c",
+	"d",
+	"j",
+	"S",
+	"C",
 ]);
 
 export const DIRECT_MODULE_ENTRY_CANDIDATES: Record<string, string[]> = {

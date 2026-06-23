@@ -1,4 +1,10 @@
-import { FIND_MUTATING_FLAGS, GIT_READ_ONLY_SUBCOMMANDS, READ_ONLY_COMMANDS } from "./constants.ts";
+import {
+	FD_EXEC_FLAGS,
+	FD_SHORT_OPTIONS_WITH_VALUES,
+	FIND_MUTATING_FLAGS,
+	GIT_READ_ONLY_SUBCOMMANDS,
+	READ_ONLY_COMMANDS,
+} from "./constants.ts";
 import { getBashParser } from "./tree-sitter.ts";
 import type { BashAnalysis, BashCommandRisk } from "./types.ts";
 
@@ -49,6 +55,22 @@ function getCommandSegmentNode(node: any): any {
 	return node.parent?.type === "redirected_statement" ? node.parent : node;
 }
 
+function fdExecutingFlag(args: string[]): string | undefined {
+	for (const arg of args) {
+		if (arg === "--") return undefined;
+		if (FD_EXEC_FLAGS.has(arg)) return arg;
+		if (arg.startsWith("--exec=") || arg.startsWith("--exec-batch=")) return arg;
+		if (!arg.startsWith("-") || arg.startsWith("--") || arg === "-") continue;
+
+		for (let index = 1; index < arg.length; index += 1) {
+			const flag = arg[index];
+			if (flag === "x" || flag === "X") return arg;
+			if (FD_SHORT_OPTIONS_WITH_VALUES.has(flag)) break;
+		}
+	}
+	return undefined;
+}
+
 function riskForCommand(node: any, splitter?: string): BashCommandRisk {
 	const segmentNode = getCommandSegmentNode(node);
 	const command = segmentNode.text.trim();
@@ -76,6 +98,13 @@ function riskForCommand(node: any, splitter?: string): BashCommandRisk {
 		return mutatingFlag
 			? withSplitter({ command, name, harmless: false, reason: `find uses ${mutatingFlag}` })
 			: withSplitter({ command, name, harmless: true, reason: "find without mutating actions" });
+	}
+
+	if (name === "fd" || name === "fdfind") {
+		const executingFlag = fdExecutingFlag(args);
+		return executingFlag
+			? withSplitter({ command, name, harmless: false, reason: `fd executes commands via ${executingFlag}` })
+			: withSplitter({ command, name, harmless: true, reason: "fd without exec actions" });
 	}
 
 	if (name === "sed") {

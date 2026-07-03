@@ -12,6 +12,7 @@ A small [pi](https://pi.dev) extension that adds a tool guard:
 - Agent bash tool calls can be allowed or denied with regex rules at four levels: global config, repo config, directory config, and current session.
 - Write confirmations can allow the current operation once or add a scoped write-directory rule for the target file's folder or a custom path.
 - Guard prompts send a best-effort desktop notification when the pi terminal is not focused.
+- In RPC mode, dangerous bash approvals use standard dialog prompts (`select` / `input`) instead of the richer custom TUI overlay, so RPC clients can proxy or answer permission requests.
 
 > This is a convenience guard, not a security sandbox. Pi extensions run with your full user permissions. For hard isolation, use OS permissions, containers, VMs, or sandboxing.
 
@@ -133,7 +134,7 @@ Agent bash tool calls are parsed with Tree-sitter, so compound lines such as `ls
 
 Known read-only commands such as `ls`, `cat`, `grep`, `rg`, safe `fd`, safe `find`, safe `sed`, and read-only `git` subcommands are treated as harmless unless they write through shell redirection. `fd`/`fdfind` calls that use exec actions (`-x`/`--exec` or `-X`/`--exec-batch`) are treated as potentially harmful. Unknown commands and known mutating patterns are treated as potentially harmful.
 
-When a potentially harmful agent bash tool call is requested, the dialog shows each analyzed command part and separates parser errors with a divider instead of folding them into the command list. Rule saving happens per dangerous parsed sub-command: if some dangerous parts are already allowed by rules, only the remaining dangerous parts are prompted for. For each prompted sub-command, the dialog uses a two-stage flow:
+When a potentially harmful agent bash tool call is requested, the TUI dialog shows each analyzed command part and separates parser errors with a divider instead of folding them into the command list. In RPC mode the same decisions are collected with sequential `select` / `input` dialogs. Rule saving happens per dangerous parsed sub-command: if some dangerous parts are already allowed by rules, only the remaining dangerous parts are prompted for. For each prompted sub-command, the dialog uses a two-stage flow:
 
 - Stage 1: `Allow once`, `Deny`, or `Save allow rule`
 - `Allow once` approves the whole bash command once

@@ -183,6 +183,10 @@ function isDenyKey(data: string) {
 }
 
 export async function editRegexRule(ctx: any, title: string, subCommand: string, initialValue: string): Promise<string | undefined> {
+	if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
+		return ctx.ui.input(`${title}\n\nCommand: ${subCommand}`, initialValue);
+	}
+
 	return ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: string | undefined) => void) => {
 		let value = initialValue;
 		let cursor = value.length;
@@ -386,6 +390,10 @@ export async function selectBashDecision(
 	const promptedCommand = evaluation.commands.find((item) => item.index === targetIndex);
 	notifyGuardPrompt(`Bash permission needed:\n${promptedCommand ? formatDisplayedBashCommand(promptedCommand) : "dangerous command"}`);
 
+	if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
+		return selectBashDecisionDialog(ctx, evaluation, analysis, targetIndex, actionChoices, scopeChoices, initialStage);
+	}
+
 	return ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: BashDialogDecision | undefined) => void) => {
 		let stage: "action" | "save" = initialStage;
 		let actionSelected = 0;
@@ -471,4 +479,53 @@ export async function selectBashDecision(
 			invalidate: () => {},
 		};
 	});
+}
+
+async function selectBashDecisionDialog(
+	ctx: any,
+	evaluation: BashAnalysisEvaluation,
+	analysis: BashAnalysis,
+	targetIndex: number,
+	actionChoices: InlineChoice<BashDialogDecision>[],
+	scopeChoices: BashRuleScope[],
+	initialStage: "action" | "save",
+): Promise<BashDialogDecision | undefined> {
+	const commandLines = evaluation.commands.length === 0
+		? ["✅ No executable commands detected"]
+		: evaluation.commands.map((item) => {
+			const approved = item.harmless || item.allowedOnce || item.ruleDecision?.type === "allow";
+			const active = item.index === targetIndex;
+			const marker = active ? (approved ? "→ ✅" : "→ ⚠️") : approved ? "  ✅" : "  ⚠️";
+			return `${marker} ${formatDisplayedBashCommand(item)}`;
+		});
+	const parserLines = analysis.parserAvailable || !analysis.error ? [] : [`Parser error: ${analysis.error}`];
+	const title = [
+		initialStage === "save" ? "Save allow rule for bash sub-command" : "Allow bash command?",
+		"",
+		...commandLines,
+		...parserLines,
+	].join("\n");
+
+	let action: BashDialogDecision | undefined;
+	if (initialStage === "save") {
+		action = { type: "save", scope: "session", mode: "exact" };
+	} else {
+		const actionLabel = await ctx.ui.select(title, actionChoices.map((choice) => choice.label));
+		action = actionChoices.find((choice) => choice.label === actionLabel)?.value;
+	}
+
+	if (!action || action.type === "block") return { type: "block" };
+	if (action.type === "allow-once") return { type: "allow-once" };
+
+	const scope = await ctx.ui.select("Save bash allow rule scope", scopeChoices);
+	if (!scope) return undefined;
+
+	const modeChoice = await ctx.ui.select("Save bash allow rule mode", ["Exact command", "Regex rule"]);
+	if (!modeChoice) return undefined;
+
+	return {
+		type: "save",
+		scope,
+		mode: modeChoice === "Regex rule" ? "regex" : "exact",
+	};
 }

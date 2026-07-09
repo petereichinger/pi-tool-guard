@@ -258,6 +258,26 @@ export async function editRegexRule(ctx: any, title: string, subCommand: string,
 	});
 }
 
+async function selectFileMutationDecisionDialog(
+	ctx: any,
+	targetReal: string,
+	actionChoices: InlineChoice<FileMutationDecision>[],
+	scopeChoices: BashRuleScope[],
+): Promise<FileMutationDecision | undefined> {
+	const actionLabel = await ctx.ui.select(
+		`Allow write?\n\n${targetReal}`,
+		actionChoices.map((choice) => choice.label),
+	);
+	const actionChoice = actionChoices.find((choice) => choice.label === actionLabel)?.value;
+	if (!actionChoice || actionChoice.type !== "save") return actionChoice;
+
+	const scope = await ctx.ui.select("Save write-directory allow rule scope", scopeChoices);
+	if (!scope) return undefined;
+	const modeChoice = await ctx.ui.select("Save write-directory allow rule mode", ["Folder of this file", "Custom path"]);
+	if (!modeChoice) return undefined;
+	return { type: "save", scope, mode: modeChoice === "Custom path" ? "custom" : "folder" };
+}
+
 export async function confirmFileMutation(
 	ctx: any,
 	_toolName: string,
@@ -279,7 +299,9 @@ export async function confirmFileMutation(
 	];
 	const scopeChoices: BashRuleScope[] = ["session", "directory", ...(config.repoLocation ? (["repo"] as const) : []), "global"];
 
-	const decision = await ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: FileMutationDecision) => void) => {
+	const decision = ctx.mode !== "tui" || typeof ctx.ui.custom !== "function"
+		? await selectFileMutationDecisionDialog(ctx, targetReal, actionChoices, scopeChoices)
+		: await ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: FileMutationDecision) => void) => {
 		let stage: "action" | "save" = "action";
 		let actionSelected = 0;
 		let scopeSelected = 0;

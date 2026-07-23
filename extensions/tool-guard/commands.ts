@@ -66,7 +66,7 @@ export function registerGuardCommands(pi: ExtensionAPI, state: GuardCommandState
 				return;
 			}
 
-			const config = await loadConfigs(ctx.cwd);
+			const config = await loadConfigs(ctx);
 			const sections: string[] = [];
 			const addSection = (title: string, rules: BashRule[]) => {
 				if (rules.length === 0) return false;

@@ -1,7 +1,6 @@
-import { lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { canonicalizeForPolicy, realpathOrResolve, stripAtPrefix } from "./path-policy.ts";
+import { createScopedJsonStore, resolveScopedConfigLocations } from "pi-scoped-config";
+import { dirname, resolve } from "node:path";
+import { canonicalizeForPolicy, stripAtPrefix } from "./path-policy.ts";
 import type {
 	BashRule,
 	BashRuleList,
@@ -15,89 +14,6 @@ import type {
 	StoredWriteDirectoryRule,
 	WriteDirectoryRule,
 } from "./types.ts";
-
-let configCache: LoadedConfigState | undefined;
-let configLoadPromise: { cwd: string; promise: Promise<LoadedConfigState> } | undefined;
-
-function getGlobalConfigPath(): string {
-	return join(getAgentDir(), "extensions", "tool-guard.json");
-}
-
-function getLegacyGlobalConfigPath(): string {
-	return join(getAgentDir(), "extensions", "simple-permissions.json");
-}
-
-function getDirectoryConfigPath(cwd: string): string {
-	return resolve(cwd, ".pi", "tool-guard.json");
-}
-
-function getLegacyDirectoryConfigPath(cwd: string): string {
-	return resolve(cwd, ".pi", "simple-permissions.json");
-}
-
-function getRepoConfigPath(commonDir: string): string {
-	return resolve(commonDir, "pi-tool-guard.json");
-}
-
-function getLegacyRepoConfigPath(commonDir: string): string {
-	return resolve(commonDir, "pi-simple-permissions.json");
-}
-
-async function loadRepoConfigLocation(cwd: string): Promise<{ location?: RepoConfigLocation; errors: string[] }> {
-	let current = await realpathOrResolve(cwd);
-	const errors: string[] = [];
-
-	while (true) {
-		const gitPath = join(current, ".git");
-		try {
-			const stat = await lstat(gitPath);
-			if (stat.isDirectory()) {
-				const commonDir = await realpathOrResolve(gitPath);
-				return { location: { repoRoot: current, commonDir, configPath: getRepoConfigPath(commonDir) }, errors };
-			}
-			if (!stat.isFile()) {
-				errors.push(`${gitPath}: ignored repo config: .git is neither a file nor a directory`);
-				return { errors };
-			}
-
-			let gitDirSpec = "";
-			try {
-				gitDirSpec = await readFile(gitPath, "utf8");
-			} catch (error: any) {
-				errors.push(`${gitPath}: failed to read gitdir file: ${error.message}`);
-				return { errors };
-			}
-
-			const match = gitDirSpec.match(/^gitdir:\s*(.+)\s*$/m);
-			if (!match) {
-				errors.push(`${gitPath}: ignored repo config: malformed gitdir file`);
-				return { errors };
-			}
-
-			const gitDir = await realpathOrResolve(resolve(current, match[1]));
-			let commonDir = gitDir;
-			try {
-				const commonDirSpec = (await readFile(join(gitDir, "commondir"), "utf8")).trim();
-				if (commonDirSpec) commonDir = await realpathOrResolve(resolve(gitDir, commonDirSpec));
-			} catch (error: any) {
-				if (error?.code !== "ENOENT") {
-					errors.push(`${join(gitDir, "commondir")}: failed to read commondir: ${error.message}`);
-				}
-			}
-
-			return { location: { repoRoot: current, commonDir, configPath: getRepoConfigPath(commonDir) }, errors };
-		} catch (error: any) {
-			if (error?.code !== "ENOENT") {
-				errors.push(`${gitPath}: failed to inspect .git: ${error.message}`);
-				return { errors };
-			}
-		}
-
-		const parent = dirname(current);
-		if (parent === current) return { errors };
-		current = parent;
-	}
-}
 
 function defaultConfig(): PermissionConfig {
 	return { version: 1, bash: { allow: [], deny: [] }, write: { allowDirectories: [] } };
@@ -115,6 +31,19 @@ function normalizeConfig(value: unknown): PermissionConfig {
 		config.bash.allow = config.bashAllowRules;
 	}
 	return config;
+}
+
+const configStore = createScopedJsonStore<PermissionConfig>({
+	name: "tool-guard",
+	legacyNames: ["simple-permissions"],
+	indent: "\t",
+	decode(value) {
+		return { value: normalizeConfig(value) };
+	},
+});
+
+function projectIsTrusted(ctx: any): boolean {
+	return typeof ctx?.isProjectTrusted === "function" && ctx.isProjectTrusted();
 }
 
 function storedRuleSource(entry: StoredBashRule): { source?: string; description?: string } {
@@ -181,123 +110,142 @@ async function compileStoredWriteDirectories(
 	return { rules, errors };
 }
 
-async function loadConfigFile(pathOrPaths: string | string[], scope: PersistentBashRuleScope): Promise<LoadedConfigFile> {
-	const candidatePaths = Array.isArray(pathOrPaths) ? pathOrPaths : [pathOrPaths];
-	let parsed: unknown = defaultConfig();
-	let loadedPath = candidatePaths[0]!;
-	const errors: string[] = [];
-
-	for (const path of candidatePaths) {
-		loadedPath = path;
-		try {
-			parsed = JSON.parse(await readFile(path, "utf8"));
-			break;
-		} catch (error: any) {
-			if (error?.code === "ENOENT") continue;
-			errors.push(`${path}: failed to read config: ${error.message}`);
-			parsed = defaultConfig();
-			break;
-		}
-	}
-
-	const config = normalizeConfig(parsed);
-	const allow = compileStoredRules(config.bash?.allow, scope, "allow", loadedPath);
-	const deny = compileStoredRules(config.bash?.deny, scope, "deny", loadedPath);
-	const writeAllowDirectories = await compileStoredWriteDirectories(config.write?.allowDirectories, scope, loadedPath);
+async function compileConfigFile(
+	file: {
+		writePath: string;
+		sourcePath?: string;
+		value?: unknown;
+		warnings: readonly string[];
+		errors: readonly string[];
+	},
+	scope: PersistentBashRuleScope,
+): Promise<LoadedConfigFile> {
+	const path = file.sourcePath ?? file.writePath;
+	const config = structuredClone(file.value ?? defaultConfig()) as PermissionConfig;
+	const allow = compileStoredRules(config.bash?.allow, scope, "allow", path);
+	const deny = compileStoredRules(config.bash?.deny, scope, "deny", path);
+	const writeAllowDirectories = await compileStoredWriteDirectories(config.write?.allowDirectories, scope, path);
 	return {
-		path: loadedPath,
+		path,
 		scope,
 		config,
 		allowRules: allow.rules,
 		denyRules: deny.rules,
 		writeAllowDirectories: writeAllowDirectories.rules,
-		errors: [...errors, ...allow.errors, ...deny.errors, ...writeAllowDirectories.errors],
+		errors: [
+			...file.warnings,
+			...file.errors,
+			...allow.errors,
+			...deny.errors,
+			...writeAllowDirectories.errors,
+		],
 	};
 }
 
-export async function loadConfigs(cwd: string): Promise<LoadedConfigState> {
-	if (configCache?.cwd === cwd) return configCache;
-	if (configLoadPromise?.cwd === cwd) return configLoadPromise.promise;
-	const promise = (async () => {
-		const [globalConfig, directoryConfig, repoLocationResult] = await Promise.all([
-			loadConfigFile([getGlobalConfigPath(), getLegacyGlobalConfigPath()], "global"),
-			loadConfigFile([getDirectoryConfigPath(cwd), getLegacyDirectoryConfigPath(cwd)], "directory"),
-			loadRepoConfigLocation(cwd),
-		]);
-		const repoConfig = repoLocationResult.location
-			? await loadConfigFile([repoLocationResult.location.configPath, getLegacyRepoConfigPath(repoLocationResult.location.commonDir)], "repo")
-			: undefined;
-		const state: LoadedConfigState = {
-			cwd,
-			global: globalConfig,
-			directory: directoryConfig,
-			repo: repoConfig,
-			repoLocation: repoLocationResult.location,
-			allowRules: [...directoryConfig.allowRules, ...(repoConfig?.allowRules ?? []), ...globalConfig.allowRules],
-			denyRules: [...directoryConfig.denyRules, ...(repoConfig?.denyRules ?? []), ...globalConfig.denyRules],
-			writeAllowDirectories: [
-				...directoryConfig.writeAllowDirectories,
-				...(repoConfig?.writeAllowDirectories ?? []),
-				...globalConfig.writeAllowDirectories,
-			],
-			errors: [...globalConfig.errors, ...directoryConfig.errors, ...repoLocationResult.errors, ...(repoConfig?.errors ?? [])],
-		};
-		configCache = state;
-		return state;
-	})();
-	configLoadPromise = { cwd, promise };
-	try {
-		return await promise;
-	} finally {
-		if (configLoadPromise?.promise === promise) configLoadPromise = undefined;
+export async function loadConfigs(ctx: any): Promise<LoadedConfigState> {
+	const trusted = projectIsTrusted(ctx);
+	const scoped = await configStore.load({ cwd: ctx.cwd, projectTrusted: trusted });
+	const globalConfig = await compileConfigFile(scoped.global, "global");
+
+	let directoryConfig: LoadedConfigFile;
+	if (scoped.directory) {
+		directoryConfig = await compileConfigFile(scoped.directory, "directory");
+	} else {
+		const locations = await resolveScopedConfigLocations({
+			cwd: ctx.cwd,
+			name: "tool-guard",
+			discoverRepository: false,
+		});
+		directoryConfig = await compileConfigFile(
+			{ writePath: locations.directory.writePath, warnings: [], errors: [] },
+			"directory",
+		);
 	}
+
+	const repoConfig = scoped.repo ? await compileConfigFile(scoped.repo, "repo") : undefined;
+	const repoLocation: RepoConfigLocation | undefined =
+		trusted && scoped.repository && scoped.repo
+			? {
+				repoRoot: scoped.repository.root,
+				commonDir: scoped.repository.commonDir,
+				configPath: scoped.repo.writePath,
+			}
+			: undefined;
+
+	return {
+		cwd: scoped.cwd,
+		global: globalConfig,
+		directory: directoryConfig,
+		repo: repoConfig,
+		repoLocation,
+		allowRules: [...directoryConfig.allowRules, ...(repoConfig?.allowRules ?? []), ...globalConfig.allowRules],
+		denyRules: [...directoryConfig.denyRules, ...(repoConfig?.denyRules ?? []), ...globalConfig.denyRules],
+		writeAllowDirectories: [
+			...directoryConfig.writeAllowDirectories,
+			...(repoConfig?.writeAllowDirectories ?? []),
+			...globalConfig.writeAllowDirectories,
+		],
+		errors: [
+			...new Set([
+				...scoped.errors,
+				...scoped.warnings,
+				...directoryConfig.errors,
+				...(repoConfig?.errors ?? []),
+				...globalConfig.errors,
+			]),
+		],
+	};
 }
 
 export function invalidateConfigCache() {
-	configCache = undefined;
-	configLoadPromise = undefined;
+	configStore.invalidate();
+}
+
+async function loadWritableConfig(
+	ctx: any,
+	scope: PersistentBashRuleScope,
+): Promise<{ path: string; config: PermissionConfig }> {
+	const trusted = projectIsTrusted(ctx);
+	if (scope !== "global" && !trusted) {
+		throw new Error(`Cannot write ${scope} config for an untrusted project`);
+	}
+
+	const scoped = await configStore.load({ cwd: ctx.cwd, projectTrusted: trusted });
+	const file = scope === "global" ? scoped.global : scope === "directory" ? scoped.directory : scoped.repo;
+	if (!file) {
+		if (scope === "repo") throw new Error("Not inside a Git repository; repo scope is unavailable");
+		throw new Error(`${scope} config is unavailable`);
+	}
+	return {
+		path: file.writePath,
+		config: structuredClone(file.value ?? defaultConfig()) as PermissionConfig,
+	};
 }
 
 async function saveConfigFile(path: string, config: PermissionConfig) {
-	await mkdir(dirname(path), { recursive: true });
-	const tmpPath = `${path}.${process.pid}.${Date.now()}.tmp`;
-	await writeFile(tmpPath, `${JSON.stringify(config, null, "\t")}\n`, "utf8");
-	await rename(tmpPath, path);
-}
-
-async function resolvePersistentConfigPath(ctx: any, scope: PersistentBashRuleScope): Promise<string> {
-	if (scope === "global") return getGlobalConfigPath();
-	if (scope === "directory") return getDirectoryConfigPath(ctx.cwd);
-	const config = await loadConfigs(ctx.cwd);
-	if (!config.repoLocation) throw new Error("Not inside a Git repository; repo scope is unavailable");
-	return config.repoLocation.configPath;
+	await configStore.write(path, config);
 }
 
 export async function addPersistentRule(ctx: any, scope: PersistentBashRuleScope, list: BashRuleList, source: string) {
 	new RegExp(source);
-	const path = await resolvePersistentConfigPath(ctx, scope);
-	const file = await loadConfigFile(path, scope);
+	const file = await loadWritableConfig(ctx, scope);
 	file.config.bash ??= { allow: [], deny: [] };
 	file.config.bash.allow ??= [];
 	file.config.bash.deny ??= [];
 	file.config.bash[list]!.push({ source });
-	await saveConfigFile(path, file.config);
-	invalidateConfigCache();
+	await saveConfigFile(file.path, file.config);
 }
 
 export async function addPersistentWriteDirectory(ctx: any, scope: PersistentBashRuleScope, directory: string) {
-	const path = await resolvePersistentConfigPath(ctx, scope);
-	const file = await loadConfigFile(path, scope);
+	const file = await loadWritableConfig(ctx, scope);
 	file.config.write ??= { allowDirectories: [] };
 	file.config.write.allowDirectories ??= [];
 	file.config.write.allowDirectories.push({ path: directory });
-	await saveConfigFile(path, file.config);
-	invalidateConfigCache();
+	await saveConfigFile(file.path, file.config);
 }
 
 export async function clearPersistentRule(ctx: any, scope: PersistentBashRuleScope, list: BashRuleList, target: string) {
-	const path = await resolvePersistentConfigPath(ctx, scope);
-	const file = await loadConfigFile(path, scope);
+	const file = await loadWritableConfig(ctx, scope);
 	file.config.bash ??= { allow: [], deny: [] };
 	file.config.bash.allow ??= [];
 	file.config.bash.deny ??= [];
@@ -311,13 +259,11 @@ export async function clearPersistentRule(ctx: any, scope: PersistentBashRuleSco
 		}
 		rules.splice(index, 1);
 	}
-	await saveConfigFile(path, file.config);
-	invalidateConfigCache();
+	await saveConfigFile(file.path, file.config);
 }
 
 export async function clearPersistentWriteDirectory(ctx: any, scope: PersistentBashRuleScope, target: string) {
-	const path = await resolvePersistentConfigPath(ctx, scope);
-	const file = await loadConfigFile(path, scope);
+	const file = await loadWritableConfig(ctx, scope);
 	file.config.write ??= { allowDirectories: [] };
 	file.config.write.allowDirectories ??= [];
 	const rules = file.config.write.allowDirectories;
@@ -330,6 +276,5 @@ export async function clearPersistentWriteDirectory(ctx: any, scope: PersistentB
 		}
 		rules.splice(index, 1);
 	}
-	await saveConfigFile(path, file.config);
-	invalidateConfigCache();
+	await saveConfigFile(file.path, file.config);
 }

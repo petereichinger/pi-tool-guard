@@ -1,8 +1,10 @@
 import { execFile, spawn } from "node:child_process";
 import { platform } from "node:os";
+import { fileURLToPath } from "node:url";
 import { isTerminalFocused } from "./terminal-focus.ts";
 
 const APP_NAME = "pi tool guard";
+const ICON_PATH = fileURLToPath(new URL("./pi-favicon.svg", import.meta.url));
 const MAX_BODY_LENGTH = 500;
 
 function truncate(value: string) {
@@ -41,7 +43,7 @@ function appleScriptString(value: string) {
 }
 
 function notifyLinux(title: string, body: string) {
-	run("notify-send", [title, body]);
+	run("notify-send", ["--app-name", APP_NAME, "--icon", ICON_PATH, title, body]);
 }
 
 function notifyMac(title: string, body: string) {

@@ -55,7 +55,7 @@ export default function toolGuard(pi: ExtensionAPI) {
 		);
 		replaceSessionRules(session.allowRules, session.denyRules, writeAllowDirectoryRules);
 		sessionRuleErrors = session.errors;
-		const config = await loadConfigs(ctx.cwd);
+		const config = await loadConfigs(ctx);
 		const warnings = [...sessionRuleErrors, ...config.errors];
 		if (ctx.hasUI && warnings.length > 0) {
 			ctx.ui.notify(`tool-guard warnings:\n${warnings.join("\n")}`, "warning");
@@ -69,7 +69,7 @@ export default function toolGuard(pi: ExtensionAPI) {
 	pi.on("tool_call", async (event, ctx) => {
 		if (event.toolName === "bash") {
 			const command = String((event.input as any).command ?? "");
-			const config = await loadConfigs(ctx.cwd);
+			const config = await loadConfigs(ctx);
 			return confirmBash(ctx, command, bashAllowRules, bashDenyRules, config, saveSessionRules);
 		}
 
@@ -85,7 +85,7 @@ export default function toolGuard(pi: ExtensionAPI) {
 		if (isInside(cwdReal, targetReal)) return undefined;
 		if (writeAllowDirectories.some((directory) => isInside(directory, targetReal))) return undefined;
 
-		const config = await loadConfigs(ctx.cwd);
+		const config = await loadConfigs(ctx);
 		if (config.writeAllowDirectories.some((rule) => isInside(rule.path, targetReal))) return undefined;
 
 		return confirmFileMutation(ctx, event.toolName, inputPath, targetReal, cwdReal, config, (scope, path) => addWriteAllowDirectory(ctx, scope, path));

@@ -64,7 +64,7 @@ export async function confirmBash(
 
 			try {
 				await addPersistentRule(ctx, decision.scope, "allow", exactRuleSource(target.command));
-				activeConfig = await loadConfigs(ctx.cwd);
+				activeConfig = await loadConfigs(ctx);
 				ctx.ui.notify(`Added exact bash allow rule for this sub-command in ${decision.scope} scope.`, "info");
 				promptStage = "save";
 				continue;
@@ -85,7 +85,7 @@ export async function confirmBash(
 				ctx.ui.notify(`Added session bash allow rule for sub-commands: /${source}/`, "info");
 			} else {
 				await addPersistentRule(ctx, decision.scope, "allow", source);
-				activeConfig = await loadConfigs(ctx.cwd);
+				activeConfig = await loadConfigs(ctx);
 				ctx.ui.notify(`Added ${decision.scope} bash allow rule for sub-commands: /${source}/`, "info");
 			}
 

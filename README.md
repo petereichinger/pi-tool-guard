@@ -67,7 +67,7 @@ Examples:
 
 ### Persistent session, directory, repo, and global rules
 
-Session bash rules and session write-directory allows are saved as custom entries in the current pi session file. Directory-scoped rules are saved in `.pi/tool-guard.json` under the current pi working directory. Repo-scoped rules are saved in the Git common dir as `pi-tool-guard.json`, which means they are shared by all worktrees of the same repository. In the main worktree that is usually `.git/pi-tool-guard.json`. Global rules are saved in `~/.pi/agent/extensions/tool-guard.json`, or under the directory pointed to by `PI_CODING_AGENT_DIR` when that environment variable is set. For compatibility, older `simple-permissions` config/session entries are still read.
+Session bash rules and session write-directory allows are saved as custom entries in the current pi session file. Directory-scoped rules are saved in `.pi/tool-guard.json` under the current pi working directory. Repo-scoped rules are saved in the Git common dir as `pi-tool-guard.json`, which means they are shared by all worktrees of the same repository. In the main worktree that is usually `.git/pi-tool-guard.json`. Global rules are saved in `~/.pi/agent/extensions/tool-guard.json`, or under the directory pointed to by `PI_CODING_AGENT_DIR` when that environment variable is set. Repository and directory configs are loaded only when pi considers the project trusted. For compatibility, older `simple-permissions` config/session entries are still read.
 
 Use the optional scope argument to persist rules:
 

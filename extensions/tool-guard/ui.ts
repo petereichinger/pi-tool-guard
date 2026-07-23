@@ -183,8 +183,14 @@ function isDenyKey(data: string) {
 }
 
 export async function editRegexRule(ctx: any, title: string, subCommand: string, initialValue: string): Promise<string | undefined> {
+	const contextualTitle = `${title}\n\nCommand: ${subCommand}`;
+	if (ctx.mode === "rpc") {
+		// RPC input's second argument is only a placeholder. Use editor so clients
+		// receive the exact-match regex as editable prefilled content.
+		return ctx.ui.editor(contextualTitle, initialValue);
+	}
 	if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
-		return ctx.ui.input(`${title}\n\nCommand: ${subCommand}`, initialValue);
+		return ctx.ui.input(contextualTitle, initialValue);
 	}
 
 	return ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: string | undefined) => void) => {
@@ -539,10 +545,12 @@ async function selectBashDecisionDialog(
 	if (!action || action.type === "block") return { type: "block" };
 	if (action.type === "allow-once") return { type: "allow-once" };
 
-	const scope = await ctx.ui.select("Save bash allow rule scope", scopeChoices);
+	const targetCommand = evaluation.commands.find((item) => item.index === targetIndex);
+	const commandContext = targetCommand ? formatDisplayedBashCommand(targetCommand) : "dangerous command";
+	const scope = await ctx.ui.select(`Save bash allow rule scope\n\nCommand: ${commandContext}`, scopeChoices);
 	if (!scope) return undefined;
 
-	const modeChoice = await ctx.ui.select("Save bash allow rule mode", ["Exact command", "Regex rule"]);
+	const modeChoice = await ctx.ui.select(`Save bash allow rule mode\n\nCommand: ${commandContext}`, ["Exact command", "Regex rule"]);
 	if (!modeChoice) return undefined;
 
 	return {

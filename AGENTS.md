@@ -78,6 +78,7 @@ When modifying the extension, preserve these policy expectations unless explicit
 - The project is ESM (`"type": "module"`).
 - Runtime dependencies are `tree-sitter` and `tree-sitter-bash`.
 - There are currently no npm test/lint scripts in `package.json`; do not invent them in documentation unless adding them.
+- Use `npm version` to create new versions; do not manually edit the version in `package.json` or `package-lock.json`.
 - Keep README behavior descriptions in sync with the implementation under `extensions/tool-guard/`.
 - Keep the extension entry point in `extensions/tool-guard.ts` pointing at the main implementation under `extensions/tool-guard/main.ts`.
 - Prefer responsibility-based modules under `extensions/tool-guard/` instead of growing `extensions/tool-guard.ts` again.

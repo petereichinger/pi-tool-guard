@@ -56,6 +56,26 @@ test("loads trusted scopes in directory, repo, global order and gates untrusted 
 	assert.equal(untrusted.repoLocation, undefined);
 });
 
+test("untrusted loads ignore malformed Git metadata", async () => {
+	const untrustedRoot = await mkdtemp(join(tmpdir(), "pi-tool-guard-untrusted-"));
+	try {
+		const untrustedCwd = join(untrustedRoot, "project");
+		await mkdir(untrustedCwd, { recursive: true });
+		await writeFile(join(untrustedCwd, ".git"), "malformed git metadata", "utf8");
+		invalidateConfigCache();
+
+		const loaded = await loadConfigs({
+			cwd: untrustedCwd,
+			isProjectTrusted: () => false,
+		});
+		assert.equal(loaded.repo, undefined);
+		assert.equal(loaded.repoLocation, undefined);
+		assert.deepEqual(loaded.errors, []);
+	} finally {
+		await rm(untrustedRoot, { recursive: true, force: true });
+	}
+});
+
 test("persists directory rules through the shared atomic writer", async () => {
 	const context = { cwd, isProjectTrusted: () => true };
 	await addPersistentRule(context, "directory", "allow", "^npm\\s+test$");

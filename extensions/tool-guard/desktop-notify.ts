@@ -1,6 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { platform } from "node:os";
 import { fileURLToPath } from "node:url";
+import { isFocusedFromPids, parseWindowsFocusSnapshot, powershellStringLiteral } from "./desktop-notify-utils.ts";
 import { isTerminalFocused } from "./terminal-focus.ts";
 
 const APP_NAME = "pi tool guard";
@@ -58,10 +59,10 @@ try {
   $template = [Windows.UI.Notifications.ToastTemplateType]::ToastText02
   $xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($template)
   $texts = $xml.GetElementsByTagName("text")
-  $texts.Item(0).AppendChild($xml.CreateTextNode(${JSON.stringify(title)})) | Out-Null
-  $texts.Item(1).AppendChild($xml.CreateTextNode(${JSON.stringify(body)})) | Out-Null
+  $texts.Item(0).AppendChild($xml.CreateTextNode(${powershellStringLiteral(title)})) | Out-Null
+  $texts.Item(1).AppendChild($xml.CreateTextNode(${powershellStringLiteral(body)})) | Out-Null
   $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-  $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(${JSON.stringify(APP_NAME)})
+  $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(${powershellStringLiteral(APP_NAME)})
   $notifier.Show($toast)
 } catch {}
 `;
@@ -105,7 +106,10 @@ async function macActiveAppPid(): Promise<number | undefined> {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-async function windowsForegroundWindowPid(): Promise<number | undefined> {
+async function windowsFocusSnapshot() {
+	// Query both the foreground process and pi's complete ancestry in one
+	// PowerShell process. Starting PowerShell once per ancestor is slow enough to
+	// exceed the old 300 ms timeout on many Windows systems.
 	const script = `
 Add-Type @"
 using System;
@@ -115,20 +119,31 @@ public class Win32Focus {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 }
 "@
-$pidOut = 0
-[Win32Focus]::GetWindowThreadProcessId([Win32Focus]::GetForegroundWindow(), [ref]$pidOut) | Out-Null
-$pidOut
+$foregroundPid = 0
+[Win32Focus]::GetWindowThreadProcessId([Win32Focus]::GetForegroundWindow(), [ref]$foregroundPid) | Out-Null
+$ancestorPids = @()
+$currentPid = [uint32]${process.pid}
+for ($depth = 0; $depth -lt 32 -and $currentPid -gt 0; $depth++) {
+  $ancestorPids += $currentPid
+  $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$currentPid" -ErrorAction SilentlyContinue
+  if ($null -eq $processInfo) { break }
+  $parentPid = [uint32]$processInfo.ParentProcessId
+  if ($parentPid -eq 0 -or $parentPid -eq $currentPid) { break }
+  $currentPid = $parentPid
+}
+[pscustomobject]@{
+  foregroundPid = [uint32]$foregroundPid
+  ancestorPids = @($ancestorPids)
+} | ConvertTo-Json -Compress
 `;
-	const output = await execText("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script]);
-	const parsed = Number(output);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+	const output = await execText("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], 1500);
+	return parseWindowsFocusSnapshot(output);
 }
 
 async function activeWindowPid(): Promise<number | undefined> {
 	const os = platform();
 	if (os === "linux") return linuxActiveWindowPid();
 	if (os === "darwin") return macActiveAppPid();
-	if (os === "win32") return windowsForegroundWindowPid();
 	return undefined;
 }
 
@@ -136,10 +151,15 @@ async function isLikelyFocused(): Promise<boolean | undefined> {
 	const terminalFocused = isTerminalFocused();
 	if (terminalFocused !== undefined) return terminalFocused;
 
+	if (platform() === "win32") {
+		const snapshot = await windowsFocusSnapshot();
+		return snapshot ? snapshot.ancestorPids.has(snapshot.foregroundPid) : undefined;
+	}
+
 	const activePid = await activeWindowPid();
 	if (!activePid) return undefined;
 	const ancestors = await ancestorPids(process.pid);
-	return ancestors.has(activePid);
+	return isFocusedFromPids(activePid, ancestors);
 }
 
 export function notifyDesktop(title: string, body: string) {

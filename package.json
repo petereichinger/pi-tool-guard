@@ -1,6 +1,6 @@
 {
   "name": "pi-tool-guard",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "A tool guard extension for pi: free writes in CWD, confirm writes outside CWD, confirm agent bash tool calls.",
   "private": false,
   "type": "module",

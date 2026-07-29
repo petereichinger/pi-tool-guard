@@ -295,7 +295,7 @@ export async function confirmFileMutation(
 ) {
 	if (!ctx.hasUI) return { block: true, reason: `Write/edit outside CWD blocked: ${targetReal}` } as const;
 
-	notifyGuardPrompt(`Write permission needed:\n${targetReal}`);
+	const notification = notifyGuardPrompt(`Write permission needed:\n${targetReal}`);
 
 	const targetDirectory = dirname(targetReal);
 	const actionChoices: InlineChoice<FileMutationDecision>[] = [
@@ -305,9 +305,9 @@ export async function confirmFileMutation(
 	];
 	const scopeChoices: BashRuleScope[] = ["session", "directory", ...(config.repoLocation ? (["repo"] as const) : []), "global"];
 
-	const decision = ctx.mode !== "tui" || typeof ctx.ui.custom !== "function"
-		? await selectFileMutationDecisionDialog(ctx, targetReal, actionChoices, scopeChoices)
-		: await ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: FileMutationDecision) => void) => {
+	const decision = await (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function"
+		? selectFileMutationDecisionDialog(ctx, targetReal, actionChoices, scopeChoices)
+		: ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: FileMutationDecision) => void) => {
 		let stage: "action" | "save" = "action";
 		let actionSelected = 0;
 		let scopeSelected = 0;
@@ -372,7 +372,7 @@ export async function confirmFileMutation(
 			},
 			invalidate: () => {},
 		};
-	});
+	})).finally(() => notification.dismiss());
 
 	if (!decision || decision.type === "block") return { block: true, reason: "Blocked by user" } as const;
 	if (decision.type === "allow-once") return undefined;
@@ -416,13 +416,14 @@ export async function selectBashDecision(
 	];
 	const scopeChoices: BashRuleScope[] = ["session", "directory", ...(config.repoLocation ? (["repo"] as const) : []), "global"];
 	const promptedCommand = evaluation.commands.find((item) => item.index === targetIndex);
-	notifyGuardPrompt(`Bash permission needed:\n${promptedCommand ? formatDisplayedBashCommand(promptedCommand) : "dangerous command"}`);
+	const notification = notifyGuardPrompt(`Bash permission needed:\n${promptedCommand ? formatDisplayedBashCommand(promptedCommand) : "dangerous command"}`);
 
-	if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
-		return selectBashDecisionDialog(ctx, evaluation, analysis, targetIndex, actionChoices, scopeChoices, initialStage);
-	}
+	try {
+		if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
+			return await selectBashDecisionDialog(ctx, evaluation, analysis, targetIndex, actionChoices, scopeChoices, initialStage);
+		}
 
-	return ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: BashDialogDecision | undefined) => void) => {
+		return await ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: BashDialogDecision | undefined) => void) => {
 		let stage: "action" | "save" = initialStage;
 		let actionSelected = 0;
 		let scopeSelected = 0;
@@ -506,7 +507,10 @@ export async function selectBashDecision(
 			},
 			invalidate: () => {},
 		};
-	});
+		});
+	} finally {
+		notification.dismiss();
+	}
 }
 
 async function selectBashDecisionDialog(

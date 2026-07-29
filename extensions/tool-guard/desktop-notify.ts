@@ -7,9 +7,17 @@ import { isTerminalFocused } from "./terminal-focus.ts";
 const APP_NAME = "pi tool guard";
 const ICON_PATH = fileURLToPath(new URL("./pi-favicon.svg", import.meta.url));
 const MAX_BODY_LENGTH = 500;
+let notificationSequence = 0;
+
+type DesktopNotification = { dismiss: () => void };
 
 function truncate(value: string) {
 	return value.length <= MAX_BODY_LENGTH ? value : `${value.slice(0, MAX_BODY_LENGTH - 1)}…`;
+}
+
+function promptExcerpt(message: string) {
+	const [heading = "Permission needed", ...commandLines] = message.split(/\r?\n/);
+	return [heading, ...commandLines.slice(0, 2)].join("\n");
 }
 
 function run(command: string, args: string[]) {
@@ -43,15 +51,34 @@ function appleScriptString(value: string) {
 	return value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
 }
 
-function notifyLinux(title: string, body: string) {
-	run("notify-send", ["--app-name", APP_NAME, "--icon", ICON_PATH, title, body]);
+function notifyLinux(title: string, body: string): DesktopNotification {
+	let dismissed = false;
+	let notificationId: string | undefined;
+	void execText("notify-send", ["--print-id", "--app-name", APP_NAME, "--icon", ICON_PATH, title, body]).then((id) => {
+		notificationId = id;
+		if (dismissed && notificationId) {
+			run("gdbus", ["call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path", "/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.CloseNotification", notificationId]);
+		}
+	});
+	return {
+		dismiss: () => {
+			dismissed = true;
+			if (notificationId) {
+				run("gdbus", ["call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path", "/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.CloseNotification", notificationId]);
+			}
+		},
+	};
 }
 
-function notifyMac(title: string, body: string) {
+function notifyMac(title: string, body: string): DesktopNotification {
 	run("osascript", ["-e", `display notification "${appleScriptString(body)}" with title "${appleScriptString(title)}"`]);
+	// AppleScript's display notification API does not expose an identifier that can
+	// be withdrawn. Keep the same lifecycle API for callers on macOS.
+	return { dismiss: () => {} };
 }
 
-function notifyWindows(title: string, body: string) {
+function notifyWindows(title: string, body: string): DesktopNotification {
+	const tag = `guard-${process.pid}-${notificationSequence++}`;
 	const script = `
 try {
   [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
@@ -62,12 +89,21 @@ try {
   $texts.Item(0).AppendChild($xml.CreateTextNode(${powershellStringLiteral(title)})) | Out-Null
   $texts.Item(1).AppendChild($xml.CreateTextNode(${powershellStringLiteral(body)})) | Out-Null
   $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+  $toast.Tag = ${powershellStringLiteral(tag)}
+  $toast.Group = ${powershellStringLiteral(APP_NAME)}
   $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(${powershellStringLiteral(APP_NAME)})
   $notifier.Show($toast)
 } catch {}
 `;
 	const encoded = Buffer.from(script, "utf16le").toString("base64");
 	run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded]);
+	return {
+		dismiss: () => {
+			const removeScript = `try { [Windows.UI.Notifications.ToastNotificationManager]::History.Remove(${powershellStringLiteral(tag)}, ${powershellStringLiteral(APP_NAME)}, ${powershellStringLiteral(APP_NAME)}) } catch {}`;
+			const removeEncoded = Buffer.from(removeScript, "utf16le").toString("base64");
+			run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", removeEncoded]);
+		},
+	};
 }
 
 async function parentPid(pid: number): Promise<number | undefined> {
@@ -162,20 +198,30 @@ async function isLikelyFocused(): Promise<boolean | undefined> {
 	return isFocusedFromPids(activePid, ancestors);
 }
 
-export function notifyDesktop(title: string, body: string) {
+export function notifyDesktop(title: string, body: string): DesktopNotification {
 	const safeTitle = truncate(title);
 	const safeBody = truncate(body);
 	const os = platform();
 	if (os === "linux") return notifyLinux(safeTitle, safeBody);
 	if (os === "darwin") return notifyMac(safeTitle, safeBody);
 	if (os === "win32") return notifyWindows(safeTitle, safeBody);
+	return { dismiss: () => {} };
 }
 
-export function notifyGuardPrompt(message: string) {
+export function notifyGuardPrompt(message: string): DesktopNotification {
+	let dismissed = false;
+	let notification: DesktopNotification | undefined;
 	void (async () => {
 		// Only notify when pi's terminal is likely not focused. If focus detection is
 		// unavailable (for example Wayland without xdotool), notify anyway.
-		if (await isLikelyFocused()) return;
-		notifyDesktop(APP_NAME, message);
+		if (await isLikelyFocused() || dismissed) return;
+		notification = notifyDesktop(APP_NAME, promptExcerpt(message));
+		if (dismissed) notification.dismiss();
 	})();
+	return {
+		dismiss: () => {
+			dismissed = true;
+			notification?.dismiss();
+		},
+	};
 }

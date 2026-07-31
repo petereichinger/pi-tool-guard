@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	ghosttySurfaceId,
 	isFocusedFromPids,
+	niriWindowIdForPids,
 	parseWindowsFocusSnapshot,
 	powershellStringLiteral,
 } from "../extensions/tool-guard/desktop-notify-utils.ts";
@@ -26,6 +28,24 @@ test("distinguishes focused, unfocused, and unknown PID state", () => {
 	assert.equal(isFocusedFromPids(20, ancestors), true);
 	assert.equal(isFocusedFromPids(99, ancestors), false);
 	assert.equal(isFocusedFromPids(undefined, ancestors), undefined);
+});
+
+test("parses Ghostty surface IDs for a uint64 D-Bus action", () => {
+	assert.equal(ghosttySurfaceId("0x000000000000002a"), "42");
+	assert.equal(ghosttySurfaceId("42"), "42");
+	assert.equal(ghosttySurfaceId("0"), undefined);
+	assert.equal(ghosttySurfaceId("not-an-id"), undefined);
+	assert.equal(ghosttySurfaceId("18446744073709551616"), undefined);
+});
+
+test("finds the relevant niri window from a process ancestry", () => {
+	const output = JSON.stringify([
+		{ id: 4, pid: 400, title: "other" },
+		{ id: 7, pid: 700, title: "pi" },
+	]);
+	assert.equal(niriWindowIdForPids(output, new Set([10, 700, 1])), 7);
+	assert.equal(niriWindowIdForPids(output, new Set([10, 20, 1])), undefined);
+	assert.equal(niriWindowIdForPids("invalid", new Set([700])), undefined);
 });
 
 test("PowerShell literals do not interpolate notification content", () => {

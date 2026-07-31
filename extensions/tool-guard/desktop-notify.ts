@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { platform } from "node:os";
 import { fileURLToPath } from "node:url";
-import { isFocusedFromPids, parseWindowsFocusSnapshot, powershellStringLiteral } from "./desktop-notify-utils.ts";
+import { ghosttySurfaceId, isFocusedFromPids, niriWindowIdForPids, parseWindowsFocusSnapshot, powershellStringLiteral } from "./desktop-notify-utils.ts";
 import { isTerminalFocused } from "./terminal-focus.ts";
 
 const APP_NAME = "pi tool guard";
@@ -34,6 +34,15 @@ function run(command: string, args: string[]) {
 	}
 }
 
+function runInTerminalSession(command: string, args: string[]) {
+	try {
+		const child = spawn(command, args, { stdio: "ignore", windowsHide: true });
+		child.on("error", () => {});
+	} catch {
+		// Terminal activation is best-effort only.
+	}
+}
+
 function execText(command: string, args: string[], timeoutMs = 300): Promise<string | undefined> {
 	return new Promise((resolve) => {
 		try {
@@ -51,23 +60,95 @@ function appleScriptString(value: string) {
 	return value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
 }
 
+async function focusLinuxTerminal() {
+	// Focus an exact terminal pane/tab first when the terminal exposes a stable ID.
+	// Keep these children in pi's terminal session: kitty's CLI can use /dev/tty for
+	// remote control when KITTY_LISTEN_ON is not configured.
+	const kittyWindowId = process.env.KITTY_WINDOW_ID;
+	if (kittyWindowId && /^\d+$/.test(kittyWindowId)) {
+		runInTerminalSession("kitty", ["@", "focus-window", "--match", `id:${kittyWindowId}`, "--no-response"]);
+	}
+	const weztermPane = process.env.WEZTERM_PANE;
+	if (weztermPane && /^\d+$/.test(weztermPane)) {
+		runInTerminalSession("wezterm", ["cli", "activate-pane", "--pane-id", weztermPane]);
+	}
+	const ghosttySurface = ghosttySurfaceId(process.env.GHOSTTY_SURFACE_ID);
+	if (ghosttySurface) {
+		// Ghostty's GTK application exposes the same action used by its own
+		// clickable terminal notifications. It raises the window and selects the
+		// tab/split containing this exact surface.
+		run("gdbus", [
+			"call", "--session",
+			"--dest", "com.mitchellh.ghostty",
+			"--object-path", "/com/mitchellh/ghostty",
+			"--method", "org.gtk.Actions.Activate",
+			"present-surface", `[<uint64 ${ghosttySurface}>]`, "[]",
+		]);
+	}
+	const tmuxPane = process.env.TMUX_PANE;
+	if (tmuxPane && /^%\d+$/.test(tmuxPane)) {
+		runInTerminalSession("tmux", ["select-pane", "-t", tmuxPane]);
+	}
+
+	const ancestors = await ancestorPids(process.pid);
+	if (process.env.NIRI_SOCKET) {
+		const windows = await execText("niri", ["msg", "-j", "windows"], 800);
+		const windowId = niriWindowIdForPids(windows, ancestors);
+		if (windowId) {
+			run("niri", ["msg", "action", "focus-window", "--id", String(windowId)]);
+			return;
+		}
+	}
+
+	// WINDOWID is the most reliable generic X11 route. Exact pane/tab selection
+	// above still improves this for multiplexing terminals such as kitty and tmux.
+	const x11WindowId = process.env.WINDOWID;
+	if (x11WindowId && /^(?:0x[\da-f]+|\d+)$/i.test(x11WindowId)) {
+		run("xdotool", ["windowactivate", "--sync", x11WindowId]);
+	}
+}
+
 function notifyLinux(title: string, body: string): DesktopNotification {
 	let dismissed = false;
 	let notificationId: string | undefined;
-	void execText("notify-send", ["--print-id", "--app-name", APP_NAME, "--icon", ICON_PATH, title, body]).then((id) => {
-		notificationId = id;
-		if (dismissed && notificationId) {
-			run("gdbus", ["call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path", "/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.CloseNotification", notificationId]);
-		}
-	});
+	let output = "";
+	try {
+		const child = spawn("notify-send", [
+			"--print-id",
+			"--action=default=Focus terminal",
+			"--app-name", APP_NAME,
+			"--icon", ICON_PATH,
+			title,
+			body,
+		], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+		child.on("error", () => {});
+		child.stdout.setEncoding("utf8");
+		child.stdout.on("data", (chunk: string) => {
+			output += chunk;
+			const lines = output.split(/\r?\n/);
+			output = lines.pop() ?? "";
+			for (const line of lines) {
+				if (/^\d+$/.test(line)) {
+					notificationId = line;
+					if (dismissed) closeLinuxNotification(line);
+				} else if (line === "default" && !dismissed) {
+					void focusLinuxTerminal();
+				}
+			}
+		});
+	} catch {
+		// Desktop notifications are best-effort only.
+	}
 	return {
 		dismiss: () => {
 			dismissed = true;
-			if (notificationId) {
-				run("gdbus", ["call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path", "/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.CloseNotification", notificationId]);
-			}
+			if (notificationId) closeLinuxNotification(notificationId);
 		},
 	};
+}
+
+function closeLinuxNotification(notificationId: string) {
+	run("gdbus", ["call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path", "/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.CloseNotification", notificationId]);
 }
 
 function notifyMac(title: string, body: string): DesktopNotification {

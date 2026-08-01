@@ -132,6 +132,145 @@ function collectCommandNodes(node: any, output: any[]) {
 	for (const child of node.children ?? []) collectCommandNodes(child, output);
 }
 
+const SSH_OPTIONS_WITH_VALUES = new Set([
+	"B", "b", "c", "D", "E", "e", "F", "I", "i", "J", "L", "l", "m", "O", "o", "P", "p", "Q", "R", "S", "W", "w",
+]);
+
+/** Evaluate only shell words whose argv value is knowable without expansion. */
+function staticShellWord(source: string): string | undefined {
+	let result = "";
+	let quote: "single" | "double" | undefined;
+	for (let index = 0; index < source.length; index += 1) {
+		const character = source[index];
+		if (quote === "single") {
+			if (character === "'") quote = undefined;
+			else result += character;
+			continue;
+		}
+		if (quote === "double") {
+			if (character === '"') {
+				quote = undefined;
+				continue;
+			}
+			if (character === "$" || character === "`") return undefined;
+			if (character === "\\" && index + 1 < source.length) {
+				const next = source[index + 1];
+				if (next === "\n") {
+					index += 1;
+					continue;
+				}
+				if (["$", "`", '"', "\\"].includes(next)) {
+					result += next;
+					index += 1;
+					continue;
+				}
+			}
+			result += character;
+			continue;
+		}
+
+		if (character === "'") quote = "single";
+		else if (character === '"') quote = "double";
+		else if (character === "\\" && index + 1 < source.length) {
+			const next = source[++index];
+			if (next !== "\n") result += next;
+		}
+		else if (character === "$" || character === "`" || "*?[{".includes(character) || (character === "~" && index === 0)) return undefined;
+		else result += character;
+	}
+	return quote ? undefined : result;
+}
+
+function sshOptionConsumesNext(value: string): boolean {
+	for (let index = 1; index < value.length; index += 1) {
+		if (!SSH_OPTIONS_WITH_VALUES.has(value[index])) continue;
+		return index === value.length - 1;
+	}
+	return false;
+}
+
+function commandArgumentNodes(node: any): any[] {
+	const result: any[] = [];
+	let foundName = false;
+	for (const child of node.children ?? []) {
+		if (child.type === "variable_assignment") continue;
+		if (!foundName && (child.type === "command_name" || child.type === "word")) {
+			foundName = true;
+			continue;
+		}
+		if (foundName && child.isNamed && child.type !== "file_redirect") result.push(child);
+	}
+	return result;
+}
+
+/**
+ * ssh passes all argv entries after the destination to a remote shell as one
+ * space-joined string. Tree-sitter correctly sees those entries as arguments,
+ * not as local shell commands, so separate the transport (through the host)
+ * and reconstruct the remote command explicitly.
+ */
+function sshCommandParts(node: any): { transport: string; remote: string } | undefined {
+	if (getCommandName(node) !== "ssh") return undefined;
+	const args = commandArgumentNodes(node);
+	let destinationNode: any | undefined;
+	let consumeOptionValue = false;
+	let index = 0;
+
+	for (; index < args.length; index += 1) {
+		const value = staticShellWord(args[index].text);
+		if (value === undefined) return undefined;
+		if (consumeOptionValue) {
+			consumeOptionValue = false;
+			continue;
+		}
+		if (value === "--") continue;
+		if (value.startsWith("-") && value !== "-") {
+			consumeOptionValue = sshOptionConsumesNext(value);
+			continue;
+		}
+		destinationNode = args[index];
+		index += 1;
+		break;
+	}
+	if (!destinationNode || consumeOptionValue || index >= args.length) return undefined;
+
+	const remoteArgs: string[] = [];
+	for (; index < args.length; index += 1) {
+		const value = staticShellWord(args[index].text);
+		if (value === undefined) return undefined;
+		remoteArgs.push(value);
+	}
+	const remote = remoteArgs.join(" ").trim();
+	if (!remote) return undefined;
+	const transportEnd = destinationNode.endIndex - node.startIndex;
+	return { transport: node.text.slice(0, transportEnd).trim(), remote };
+}
+
+function risksForParsedCommand(command: string, parser: any, depth = 0): BashCommandRisk[] {
+	const tree = parser.parse(command);
+	const nodes: any[] = [];
+	collectCommandNodes(tree.rootNode, nodes);
+	const sortedNodes = nodes.sort((a, b) => a.startIndex - b.startIndex);
+	let previousEnd = 0;
+	const risks: BashCommandRisk[] = [];
+	for (const node of sortedNodes) {
+		const splitter = command.slice(previousEnd, node.startIndex).trim();
+		previousEnd = getCommandSegmentNode(node).endIndex;
+		let risk = riskForCommand(node, splitter || undefined);
+		const sshParts = depth < 4 ? sshCommandParts(node) : undefined;
+		if (sshParts) risk = { ...risk, command: sshParts.transport };
+		risks.push(risk);
+
+		if (!sshParts) continue;
+		const remoteRisks = risksForParsedCommand(sshParts.remote, parser, depth + 1);
+		if (remoteRisks.length > 0) {
+			remoteRisks[0] = { ...remoteRisks[0], splitter: "ssh remote →" };
+			risks.push(...remoteRisks);
+		}
+	}
+	return risks;
+}
+
 export async function analyzeBash(command: string): Promise<BashAnalysis> {
 	const { parser, error: loadError } = await getBashParser();
 	if (!parser) {
@@ -143,17 +282,7 @@ export async function analyzeBash(command: string): Promise<BashAnalysis> {
 	}
 
 	try {
-		const tree = parser.parse(command);
-		const nodes: any[] = [];
-		collectCommandNodes(tree.rootNode, nodes);
-		const sortedNodes = nodes.sort((a, b) => a.startIndex - b.startIndex);
-		let previousEnd = 0;
-		const commands = sortedNodes.map((node) => {
-			const splitter = command.slice(previousEnd, node.startIndex).trim();
-			previousEnd = getCommandSegmentNode(node).endIndex;
-			return riskForCommand(node, splitter || undefined);
-		});
-		return { parserAvailable: true, commands };
+		return { parserAvailable: true, commands: risksForParsedCommand(command, parser) };
 	} catch (error: any) {
 		return {
 			parserAvailable: false,

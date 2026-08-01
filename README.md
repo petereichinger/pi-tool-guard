@@ -130,7 +130,7 @@ When a write/edit outside the current working directory is requested, the dialog
 
 ## Bash risk analysis and confirmation dialog
 
-Agent bash tool calls are parsed with Tree-sitter, so compound lines such as `ls && rm -rf tmp` or `git status | grep foo` are analyzed command-by-command instead of as one opaque string.
+Agent bash tool calls are parsed with Tree-sitter, so compound lines such as `ls && rm -rf tmp` or `git status | grep foo` are analyzed command-by-command instead of as one opaque string. Because an SSH remote command is only an argument from the local shell parser's perspective, the extension separates a static SSH transport through the destination (for example, `ssh host`) from the remote command and parses the latter separately. For example, `ssh host 'ls && rm -rf tmp'` exposes `ssh host`, `ls`, and `rm -rf tmp` to independent risk and rule checks. This lets an exact allow rule trust one SSH host without trusting other hosts or every remote command. Commands containing local expansions that cannot be reconstructed safely remain conservative and are represented by the potentially harmful outer `ssh` invocation only.
 
 Known read-only commands such as `ls`, `cat`, `grep`, `rg`, safe `fd`, safe `find`, safe `sed`, and read-only `git` subcommands are treated as harmless unless they write through shell redirection. `fd`/`fdfind` calls that use exec actions (`-x`/`--exec` or `-X`/`--exec-batch`) are treated as potentially harmful. Unknown commands and known mutating patterns are treated as potentially harmful.
 
@@ -149,6 +149,6 @@ When a potentially harmful agent bash tool call is requested, interactive and RP
 - `read`, `ls`, `grep`, `rg`, safe `fd`, and safe `find` are allowed anywhere by this extension. If you want read/list restrictions too, extend the policy to gate those tools.
 - Other custom extensions/tools may mutate files internally and bypass this policy. Only run trusted extensions.
 - Bash risk analysis is conservative, not a sandbox or proof of safety. Unknown commands are considered potentially harmful, while allow rules can bypass analysis.
-- Regex allow rules are powerful. For example, `/guard-allow ^ssh\b` allows any parsed bash sub-command beginning with `ssh` for the current pi session, including inside compound lines and after `/reload` or resuming that session.
+- Regex allow rules are powerful. For example, `/guard-allow-exact ssh oakl.ing` allows that SSH transport for the current pi session, while another host is still prompted. Statically reconstructable remote sub-commands are evaluated against their own rules, so the host rule alone does not allow a remote `rm` or other potentially mutating command. A broader `/guard-allow ^ssh\b` rule trusts every parsed SSH transport.
 - Directory/repo/global persistent rules are normal JSON files. Review them before sharing a project, especially directory rules under `.pi/` and repo rules under the shared Git metadata directory. Session rules live in the pi session file.
 - Deny rules are hard blocks and override matching allow rules at any scope.

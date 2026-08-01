@@ -12,7 +12,7 @@ A small [pi](https://pi.dev) extension that adds a tool guard:
 - Agent bash tool calls can be allowed or denied with regex rules at four levels: global config, repo config, directory config, and current session.
 - Write confirmations can allow the current operation once or add a scoped write-directory rule for the target file's folder or a custom path.
 - Guard prompts send a best-effort desktop notification when the pi terminal is not focused. It includes at most the first two command lines and is dismissed when a decision is made (where supported by the desktop notification service). On Linux, clicking it focuses the relevant terminal window; kitty, Ghostty, WezTerm, and tmux sessions also attempt to select the exact tab or pane.
-- In RPC mode, dangerous bash approvals use standard dialog prompts (`select` / `input`) instead of the richer custom TUI overlay, so RPC clients can proxy or answer permission requests.
+- Interactive and RPC modes use the same standard dialog flow (`select` / `input` / `editor`), so permission requests behave consistently and RPC clients can proxy or answer them.
 
 > This is a convenience guard, not a security sandbox. Pi extensions run with your full user permissions. For hard isolation, use OS permissions, containers, VMs, or sandboxing.
 
@@ -134,13 +134,13 @@ Agent bash tool calls are parsed with Tree-sitter, so compound lines such as `ls
 
 Known read-only commands such as `ls`, `cat`, `grep`, `rg`, safe `fd`, safe `find`, safe `sed`, and read-only `git` subcommands are treated as harmless unless they write through shell redirection. `fd`/`fdfind` calls that use exec actions (`-x`/`--exec` or `-X`/`--exec-batch`) are treated as potentially harmful. Unknown commands and known mutating patterns are treated as potentially harmful.
 
-When a potentially harmful agent bash tool call is requested, the TUI dialog shows each analyzed command part and separates parser errors with a divider instead of folding them into the command list. In RPC mode the same decisions are collected with sequential `select` dialogs and a prefilled `editor` for regex rules. Each rule-saving request repeats the current sub-command so it remains visible as the RPC client replaces one dialog with the next. Rule saving happens per dangerous parsed sub-command: if some dangerous parts are already allowed by rules, only the remaining dangerous parts are prompted for. For each prompted sub-command, the dialog uses a two-stage flow:
+When a potentially harmful agent bash tool call is requested, interactive and RPC modes use the same sequential `select` dialogs and a prefilled `editor` for regex rules. The prompt shows each analyzed command part, including any parser error. Each rule-saving request repeats the current sub-command so it remains visible as one dialog replaces the next. Rule saving happens per dangerous parsed sub-command: if some dangerous parts are already allowed by rules, only the remaining dangerous parts are prompted for. For each prompted sub-command, the dialog uses a two-stage flow:
 
 - Stage 1: `Allow once`, `Deny`, or `Save allow rule`
 - `Allow once` approves the whole bash command once
 - `Save allow rule` switches into per-sub-command rule-saving mode, highlighting one dangerous sub-command at a time
 - In that mode you choose scope (`session`, `directory`, `repo`, or `global`) and exact-vs-regex for the highlighted sub-command, then continue to the next remaining dangerous sub-command
-- If you choose regex, it opens a regex editor showing the current sub-command, prefilled with an exact-match regex, and shows whether the current regex is valid
+- If you choose regex, it opens an editor showing the current sub-command and prefilled with an exact-match regex; the submitted regex is validated before it is saved
 
 ## Important caveats
 

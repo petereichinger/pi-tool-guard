@@ -3,6 +3,15 @@ import test from "node:test";
 
 import { analyzeBash } from "../extensions/tool-guard/bash-analysis.ts";
 
+test("allows a read-only command that discards output to /dev/null", async () => {
+	for (const redirect of [">/dev/null", "2>/dev/null", "&>/dev/null"]) {
+		const analysis = await analyzeBash(`rg -n "issue.?8|#8|TODO|planned" README.md AGENTS.md .forgejo .git ${redirect}`);
+		assert.deepEqual(analysis.commands.map(({ name, harmless, reason }) => ({ name, harmless, reason })), [
+			{ name: "rg", harmless: true, reason: "known read-only command" },
+		]);
+	}
+});
+
 test("analyzes a quoted ssh remote command command-by-command", async () => {
 	const analysis = await analyzeBash("ssh host 'ls && rm -rf /tmp/example'");
 

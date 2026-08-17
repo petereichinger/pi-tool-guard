@@ -17,8 +17,17 @@ function stripShellQuotes(value: string): string {
 	return value;
 }
 
+function isDevNullDiscardRedirect(node: any): boolean {
+	const operator = (node.children ?? []).find((child: any) => [">", ">>", "&>", "&>>"].includes(child.type))?.type;
+	return (
+		[">", ">>", "&>", "&>>"].includes(operator) &&
+		node.childForFieldName?.("destination")?.text === "/dev/null"
+	);
+}
+
 function hasWritingRedirectNode(node: any): boolean {
 	if (node.type === "file_redirect") {
+		if (isDevNullDiscardRedirect(node)) return false;
 		return (node.children ?? []).some((child: any) => [">", ">>", "&>", "&>>", "<>", ">&"].includes(child.type));
 	}
 	return (node.children ?? []).some((child: any) => hasWritingRedirectNode(child));

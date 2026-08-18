@@ -13,6 +13,7 @@ A small [pi](https://pi.dev) extension that adds a tool guard:
 - Write confirmations can allow the current operation once or add a scoped write-directory rule for the target file's folder or a custom path.
 - Guard prompts send a best-effort desktop notification when the pi terminal is not focused. It includes at most the first two command lines and is dismissed when a decision is made (where supported by the desktop notification service). On Linux, clicking it focuses the relevant terminal window; kitty, Ghostty, WezTerm, and tmux sessions also attempt to select the exact tab or pane.
 - Interactive and RPC modes use the same standard dialog flow (`select` / `input` / `editor`), so permission requests behave consistently and RPC clients can proxy or answer them.
+- When running in a [Herdr](https://herdr.dev) pane, active guard dialogs are reported as `blocked` / waiting for input and released when the dialog closes. Herdr remains optional; its absence or a reporting failure never affects permission decisions.
 
 > This is a convenience guard, not a security sandbox. Pi extensions run with your full user permissions. For hard isolation, use OS permissions, containers, VMs, or sandboxing.
 

@@ -1,5 +1,6 @@
 import { dirname, resolve } from "node:path";
 import { notifyGuardPrompt } from "./desktop-notify.ts";
+import { withHerdrInputStatus } from "./herdr-status.ts";
 import { canonicalizeForPolicy, isInside, stripAtPrefix } from "./path-policy.ts";
 import { formatDisplayedBashCommand } from "./rule-utils.ts";
 import type {
@@ -18,7 +19,7 @@ type DialogChoice<T> = {
 
 export async function editRegexRule(ctx: any, title: string, subCommand: string, initialValue: string): Promise<string | undefined> {
 	const contextualTitle = `${title}\n\nCommand: ${subCommand}`;
-	return ctx.ui.editor(contextualTitle, initialValue);
+	return withHerdrInputStatus(() => ctx.ui.editor(contextualTitle, initialValue));
 }
 
 async function selectFileMutationDecisionDialog(
@@ -60,7 +61,7 @@ export async function confirmFileMutation(
 	];
 	const scopeChoices: BashRuleScope[] = ["session", "directory", ...(config.repoLocation ? (["repo"] as const) : []), "global"];
 
-	const decision = await selectFileMutationDecisionDialog(ctx, targetReal, actionChoices, scopeChoices)
+	const decision = await withHerdrInputStatus(() => selectFileMutationDecisionDialog(ctx, targetReal, actionChoices, scopeChoices))
 		.finally(() => notification.dismiss());
 
 	if (!decision || decision.type === "block") return { block: true, reason: "Blocked by user" } as const;
@@ -68,7 +69,7 @@ export async function confirmFileMutation(
 
 	let allowedPath = dirname(targetReal);
 	if (decision.mode === "custom") {
-		const input = await ctx.ui.input("Path to allow writes under", allowedPath);
+		const input = await withHerdrInputStatus(() => ctx.ui.input("Path to allow writes under", allowedPath));
 		if (!input) return { block: true, reason: "Blocked by user" } as const;
 		allowedPath = await canonicalizeForPolicy(resolve(ctx.cwd, stripAtPrefix(input)));
 	}
@@ -108,7 +109,7 @@ export async function selectBashDecision(
 	const notification = notifyGuardPrompt(`Bash permission needed:\n${promptedCommand ? formatDisplayedBashCommand(promptedCommand) : "dangerous command"}`);
 
 	try {
-		return await selectBashDecisionDialog(ctx, evaluation, analysis, targetIndex, actionChoices, scopeChoices, initialStage);
+		return await withHerdrInputStatus(() => selectBashDecisionDialog(ctx, evaluation, analysis, targetIndex, actionChoices, scopeChoices, initialStage));
 	} finally {
 		notification.dismiss();
 	}

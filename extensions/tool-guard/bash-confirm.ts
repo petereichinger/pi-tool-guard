@@ -2,6 +2,7 @@ import { addPersistentRule, loadConfigs } from "./config-store.ts";
 import { analyzeBash, formatBashAnalysis } from "./bash-analysis.ts";
 import { evaluateBashAnalysis } from "./bash-evaluation.ts";
 import { addExactRule, exactRuleSource, formatDisplayedBashCommand, ruleLabel } from "./rule-utils.ts";
+import type { HerdrInputStatusReporter } from "./herdr-status.ts";
 import { editRegexRule, selectBashDecision } from "./ui.ts";
 import type { BashRule, LoadedConfigState } from "./types.ts";
 
@@ -12,6 +13,7 @@ export async function confirmBash(
 	bashDenyRules: BashRule[],
 	config: LoadedConfigState,
 	onSessionRulesChanged: () => void = () => {},
+	reportHerdrInputStatus?: HerdrInputStatusReporter,
 ) {
 	let activeConfig = config;
 	const analysis = await analyzeBash(command);
@@ -48,7 +50,15 @@ export async function confirmBash(
 		}
 
 		const target = evaluation.pendingDangerous[0]!;
-		const decision = await selectBashDecision(ctx, evaluation, analysis, target.index, activeConfig, promptStage);
+		const decision = await selectBashDecision(
+			ctx,
+			evaluation,
+			analysis,
+			target.index,
+			activeConfig,
+			promptStage,
+			reportHerdrInputStatus,
+		);
 		promptStage = "action";
 		if (!decision || decision.type === "block") return { block: true, reason: "Blocked by user" } as const;
 		if (decision.type === "allow-once") return undefined;
@@ -74,7 +84,13 @@ export async function confirmBash(
 			}
 		}
 
-		const source = (await editRegexRule(ctx, "Bash allow regex for sub-command", target.command, exactRuleSource(target.command)))?.trim();
+		const source = (await editRegexRule(
+			ctx,
+			"Bash allow regex for sub-command",
+			target.command,
+			exactRuleSource(target.command),
+			reportHerdrInputStatus,
+		))?.trim();
 		if (!source) return { block: true, reason: "Blocked by user" } as const;
 
 		try {

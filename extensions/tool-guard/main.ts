@@ -5,6 +5,7 @@ import { registerGuardCommands } from "./commands.ts";
 import { WRITING_TOOLS, SESSION_RULES_ENTRY_TYPE } from "./constants.ts";
 import { addPersistentWriteDirectory, loadConfigs } from "./config-store.ts";
 import { canonicalizeForPolicy, isInside, realpathOrResolve, stripAtPrefix } from "./path-policy.ts";
+import type { HerdrInputStatusReporter } from "./herdr-status.ts";
 import { persistedSessionRules, loadSessionRules } from "./session-rules.ts";
 import { setupTerminalFocusTracking } from "./terminal-focus.ts";
 import { confirmFileMutation } from "./ui.ts";
@@ -18,6 +19,9 @@ export default function toolGuard(pi: ExtensionAPI) {
 	const bashDenyRules: BashRule[] = [];
 	const writeAllowDirectories: string[] = [];
 	let sessionRuleErrors: string[] = [];
+	const reportHerdrInputStatus: HerdrInputStatusReporter = (active, label) => {
+		pi.events.emit("herdr:blocked", { active, label });
+	};
 
 	const saveSessionRules = () => {
 		sessionRuleErrors = [];
@@ -70,7 +74,15 @@ export default function toolGuard(pi: ExtensionAPI) {
 		if (event.toolName === "bash") {
 			const command = String((event.input as any).command ?? "");
 			const config = await loadConfigs(ctx);
-			return confirmBash(ctx, command, bashAllowRules, bashDenyRules, config, saveSessionRules);
+			return confirmBash(
+				ctx,
+				command,
+				bashAllowRules,
+				bashDenyRules,
+				config,
+				saveSessionRules,
+				reportHerdrInputStatus,
+			);
 		}
 
 		if (!WRITING_TOOLS.has(event.toolName)) return undefined;
@@ -88,6 +100,15 @@ export default function toolGuard(pi: ExtensionAPI) {
 		const config = await loadConfigs(ctx);
 		if (config.writeAllowDirectories.some((rule) => isInside(rule.path, targetReal))) return undefined;
 
-		return confirmFileMutation(ctx, event.toolName, inputPath, targetReal, cwdReal, config, (scope, path) => addWriteAllowDirectory(ctx, scope, path));
+		return confirmFileMutation(
+			ctx,
+			event.toolName,
+			inputPath,
+			targetReal,
+			cwdReal,
+			config,
+			(scope, path) => addWriteAllowDirectory(ctx, scope, path),
+			reportHerdrInputStatus,
+		);
 	});
 }

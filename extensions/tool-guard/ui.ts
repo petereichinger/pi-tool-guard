@@ -114,6 +114,7 @@ export async function selectBashDecision(
 	config: LoadedConfigState,
 	initialStage: "action" | "save" = "action",
 	reportHerdrInputStatus?: HerdrInputStatusReporter,
+	shellLabel = "Bash",
 ): Promise<BashDialogDecision | undefined> {
 	const actionChoices: DialogChoice<BashDialogDecision>[] = [
 		{ label: "Allow once", value: { type: "allow-once" } },
@@ -122,11 +123,11 @@ export async function selectBashDecision(
 	];
 	const scopeChoices: BashRuleScope[] = ["session", "directory", ...(config.repoLocation ? (["repo"] as const) : []), "global"];
 	const promptedCommand = evaluation.commands.find((item) => item.index === targetIndex);
-	const notification = notifyGuardPrompt(`Bash permission needed:\n${promptedCommand ? formatDisplayedBashCommand(promptedCommand) : "dangerous command"}`);
+	const notification = notifyGuardPrompt(`${shellLabel} permission needed:\n${promptedCommand ? formatDisplayedBashCommand(promptedCommand) : "dangerous command"}`);
 
 	try {
 		return await withHerdrInputStatus(
-			() => selectBashDecisionDialog(ctx, evaluation, analysis, targetIndex, actionChoices, scopeChoices, initialStage),
+			() => selectBashDecisionDialog(ctx, evaluation, analysis, targetIndex, actionChoices, scopeChoices, initialStage, shellLabel),
 			undefined,
 			reportHerdrInputStatus,
 		);
@@ -143,7 +144,9 @@ async function selectBashDecisionDialog(
 	actionChoices: DialogChoice<BashDialogDecision>[],
 	scopeChoices: BashRuleScope[],
 	initialStage: "action" | "save",
+	shellLabel: string,
 ): Promise<BashDialogDecision | undefined> {
+	const shellName = shellLabel.toLowerCase();
 	const commandLines = evaluation.commands.length === 0
 		? ["✅ No executable commands detected"]
 		: evaluation.commands.map((item) => {
@@ -154,7 +157,7 @@ async function selectBashDecisionDialog(
 		});
 	const parserLines = analysis.parserAvailable || !analysis.error ? [] : [`Parser error: ${analysis.error}`];
 	const title = [
-		initialStage === "save" ? "Save allow rule for bash sub-command" : "Allow bash command?",
+		initialStage === "save" ? `Save allow rule for ${shellName} command` : `Allow ${shellName} command?`,
 		"",
 		...commandLines,
 		...parserLines,
@@ -173,10 +176,10 @@ async function selectBashDecisionDialog(
 
 	const targetCommand = evaluation.commands.find((item) => item.index === targetIndex);
 	const commandContext = targetCommand ? formatDisplayedBashCommand(targetCommand) : "dangerous command";
-	const scope = await ctx.ui.select(`Save bash allow rule scope\n\nCommand: ${commandContext}`, scopeChoices);
+	const scope = await ctx.ui.select(`Save ${shellName} allow rule scope\n\nCommand: ${commandContext}`, scopeChoices);
 	if (!scope) return undefined;
 
-	const modeChoice = await ctx.ui.select(`Save bash allow rule mode\n\nCommand: ${commandContext}`, ["Exact command", "Regex rule"]);
+	const modeChoice = await ctx.ui.select(`Save ${shellName} allow rule mode\n\nCommand: ${commandContext}`, ["Exact command", "Regex rule"]);
 	if (!modeChoice) return undefined;
 
 	return {

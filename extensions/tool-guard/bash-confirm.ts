@@ -1,13 +1,15 @@
 import { addPersistentRule, loadConfigs } from "./config-store.ts";
 import { analyzeBash, formatBashAnalysis } from "./bash-analysis.ts";
 import { evaluateBashAnalysis } from "./bash-evaluation.ts";
+import { analyzePowerShell } from "./powershell-analysis.ts";
 import { addExactRule, exactRuleSource, formatDisplayedBashCommand, ruleLabel } from "./rule-utils.ts";
 import type { HerdrInputStatusReporter } from "./herdr-status.ts";
 import { editRegexRule, selectBashDecision } from "./ui.ts";
 import type { BashRule, LoadedConfigState } from "./types.ts";
 
-export async function confirmBash(
+export async function confirmShell(
 	ctx: any,
+	shell: "bash" | "powershell",
 	command: string,
 	bashAllowRules: BashRule[],
 	bashDenyRules: BashRule[],
@@ -16,17 +18,18 @@ export async function confirmBash(
 	reportHerdrInputStatus?: HerdrInputStatusReporter,
 ) {
 	let activeConfig = config;
-	const analysis = await analyzeBash(command);
+	const shellLabel = shell === "powershell" ? "PowerShell" : "Bash";
+	const analysis = shell === "powershell" ? analyzePowerShell(command) : await analyzeBash(command);
 	const allHarmless = analysis.commands.every((item) => item.harmless);
 	if (allHarmless) {
 		const harmlessEvaluation = evaluateBashAnalysis(analysis, new Set<number>(), bashAllowRules, bashDenyRules, activeConfig);
 		if (harmlessEvaluation.denied) {
 			return {
 				block: true,
-				reason: `Bash sub-command denied by ${ruleLabel(harmlessEvaluation.denied.ruleDecision!.rule)}: ${formatDisplayedBashCommand(harmlessEvaluation.denied)}`,
+				reason: `${shellLabel} command denied by ${ruleLabel(harmlessEvaluation.denied.ruleDecision!.rule)}: ${formatDisplayedBashCommand(harmlessEvaluation.denied)}`,
 			} as const;
 		}
-		if (ctx.hasUI) ctx.ui.notify(`Allowed harmless bash command:\n${formatBashAnalysis(analysis)}`, "info");
+		if (ctx.hasUI) ctx.ui.notify(`Allowed harmless ${shellLabel} command:\n${formatBashAnalysis(analysis)}`, "info");
 		return undefined;
 	}
 
@@ -37,7 +40,7 @@ export async function confirmBash(
 		if (evaluation.denied) {
 			return {
 				block: true,
-				reason: `Bash sub-command denied by ${ruleLabel(evaluation.denied.ruleDecision!.rule)}: ${formatDisplayedBashCommand(evaluation.denied)}`,
+				reason: `${shellLabel} command denied by ${ruleLabel(evaluation.denied.ruleDecision!.rule)}: ${formatDisplayedBashCommand(evaluation.denied)}`,
 			} as const;
 		}
 		if (evaluation.pendingDangerous.length === 0) return undefined;
@@ -45,7 +48,7 @@ export async function confirmBash(
 		if (!ctx.hasUI) {
 			return {
 				block: true,
-				reason: `Bash command blocked because no UI is available to approve dangerous sub-commands.\n${formatBashAnalysis(analysis)}`,
+				reason: `${shellLabel} command blocked because no UI is available to approve potentially harmful commands.\n${formatBashAnalysis(analysis)}`,
 			} as const;
 		}
 
@@ -58,6 +61,7 @@ export async function confirmBash(
 			activeConfig,
 			promptStage,
 			reportHerdrInputStatus,
+			shellLabel,
 		);
 		promptStage = "action";
 		if (!decision || decision.type === "block") return { block: true, reason: "Blocked by user" } as const;
@@ -67,7 +71,7 @@ export async function confirmBash(
 			if (decision.scope === "session") {
 				addExactRule(target.command, bashAllowRules, "session", "allow");
 				onSessionRulesChanged();
-				ctx.ui.notify("Added exact bash allow rule for this sub-command in this session.", "info");
+				ctx.ui.notify(`Added exact ${shellLabel} allow rule for this command in this session.`, "info");
 				promptStage = "save";
 				continue;
 			}
@@ -75,7 +79,7 @@ export async function confirmBash(
 			try {
 				await addPersistentRule(ctx, decision.scope, "allow", exactRuleSource(target.command));
 				activeConfig = await loadConfigs(ctx);
-				ctx.ui.notify(`Added exact bash allow rule for this sub-command in ${decision.scope} scope.`, "info");
+				ctx.ui.notify(`Added exact ${shellLabel} allow rule for this command in ${decision.scope} scope.`, "info");
 				promptStage = "save";
 				continue;
 			} catch (error: any) {
@@ -86,7 +90,7 @@ export async function confirmBash(
 
 		const source = (await editRegexRule(
 			ctx,
-			"Bash allow regex for sub-command",
+			`${shellLabel} allow regex for command`,
 			target.command,
 			exactRuleSource(target.command),
 			reportHerdrInputStatus,
@@ -98,11 +102,11 @@ export async function confirmBash(
 			if (decision.scope === "session") {
 				bashAllowRules.push({ source, regex, scope: "session", list: "allow" });
 				onSessionRulesChanged();
-				ctx.ui.notify(`Added session bash allow rule for sub-commands: /${source}/`, "info");
+				ctx.ui.notify(`Added session ${shellLabel} allow rule for commands: /${source}/`, "info");
 			} else {
 				await addPersistentRule(ctx, decision.scope, "allow", source);
 				activeConfig = await loadConfigs(ctx);
-				ctx.ui.notify(`Added ${decision.scope} bash allow rule for sub-commands: /${source}/`, "info");
+				ctx.ui.notify(`Added ${decision.scope} ${shellLabel} allow rule for commands: /${source}/`, "info");
 			}
 
 			regex.lastIndex = 0;

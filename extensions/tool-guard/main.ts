@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { confirmBash } from "./bash-confirm.ts";
+import { confirmShell } from "./bash-confirm.ts";
 import { registerGuardCommands } from "./commands.ts";
 import { WRITING_TOOLS, SESSION_RULES_ENTRY_TYPE } from "./constants.ts";
 import { addPersistentWriteDirectory, loadConfigs } from "./config-store.ts";
@@ -12,7 +12,7 @@ import { confirmFileMutation } from "./ui.ts";
 import type { BashRule, BashRuleScope, PersistentBashRuleScope } from "./types.ts";
 
 const POLICY_PROMPT =
-	"\n\nPermission policy active: read/list/search tools are allowed; write/edit targets inside the current working directory are allowed; write/edit targets outside the current working directory require user confirmation unless they are under a scoped write-directory allow rule; agent bash tool calls are parsed with tree-sitter-bash and each simple command is classified as harmless or potentially harmful. Bash allow/deny rules apply to each parsed sub-command, not the whole line. Fully harmless bash lines are allowed automatically unless a deny rule matches one of their parsed sub-commands. Potentially harmful sub-commands require approval unless they match a session, directory, repo, or global allow regex. Matching deny regexes override allows and block the bash tool call.";
+	"\n\nPermission policy active: read/list/search tools are allowed; write/edit targets inside the current working directory are allowed; write/edit targets outside the current working directory require user confirmation unless they are under a scoped write-directory allow rule; agent bash and PowerShell tool calls are guarded. Bash calls are parsed with tree-sitter-bash and classified command-by-command; PowerShell calls conservatively require approval as a complete script. Command allow/deny rules apply to each parsed Bash sub-command or complete PowerShell script. Fully harmless Bash lines are allowed automatically unless a deny rule matches. Potentially harmful commands require approval unless they match a session, directory, repo, or global allow regex. Matching deny regexes override allows and block the shell tool call.";
 
 export default function toolGuard(pi: ExtensionAPI) {
 	const bashAllowRules: BashRule[] = [];
@@ -71,11 +71,12 @@ export default function toolGuard(pi: ExtensionAPI) {
 	}));
 
 	pi.on("tool_call", async (event, ctx) => {
-		if (event.toolName === "bash") {
+		if (event.toolName === "bash" || event.toolName === "powershell") {
 			const command = String((event.input as any).command ?? "");
 			const config = await loadConfigs(ctx);
-			return confirmBash(
+			return confirmShell(
 				ctx,
+				event.toolName,
 				command,
 				bashAllowRules,
 				bashDenyRules,

@@ -26,16 +26,16 @@ export function registerGuardCommands(pi: ExtensionAPI, state: GuardCommandState
 			const rules = list === "allow" ? bashAllowRules : bashDenyRules;
 			addRule(source, rules, "session", list);
 			saveSessionRules();
-			ctx.ui.notify(`Added session bash ${list} rule #${rules.length}: /${source}/`, "info");
+			ctx.ui.notify(`Added session shell ${list} rule #${rules.length}: /${source}/`, "info");
 			return;
 		}
 		await addPersistentRule(ctx, scope, list, source);
-		ctx.ui.notify(`Added ${scope} bash ${list} rule: /${source}/`, "info");
+		ctx.ui.notify(`Added ${scope} shell ${list} rule: /${source}/`, "info");
 	};
 
 	const registerRuleCommand = (name: string, list: BashRuleList, exact: boolean) => {
 		pi.registerCommand(name, {
-			description: `${list === "allow" ? "Allow" : "Deny"} ${exact ? "one exact" : "matching"} bash sub-command${exact ? "" : "s"}. Usage: /${name} [session|directory|repo|global] <${exact ? "command" : "regex"}>`,
+			description: `${list === "allow" ? "Allow" : "Deny"} ${exact ? "one exact" : "matching"} shell command${exact ? "" : "s"}. Usage: /${name} [session|directory|repo|global] <${exact ? "command" : "regex"}>`,
 			handler: async (args, ctx) => {
 				const { scope, value } = splitOptionalScope(args);
 				if (!value) {
@@ -58,7 +58,7 @@ export function registerGuardCommands(pi: ExtensionAPI, state: GuardCommandState
 	registerRuleCommand("guard-deny-exact", "deny", true);
 
 	pi.registerCommand("guard-list", {
-		description: "List bash allow/deny rules and session write-directory allows. Usage: /guard-list [all|session|directory|repo|global]",
+		description: "List shell allow/deny rules and session write-directory allows. Usage: /guard-list [all|session|directory|repo|global]",
 		handler: async (args, ctx) => {
 			const scope = args.trim() || "all";
 			if (!["all", "session", "directory", "repo", "global"].includes(scope)) {
@@ -120,7 +120,7 @@ export function registerGuardCommands(pi: ExtensionAPI, state: GuardCommandState
 	});
 
 	pi.registerCommand("guard-clear", {
-		description: "Clear bash rules or session write-directory allows. Usage: /guard-clear [session|directory|repo|global] [all|allow|deny|write|number] [all|number]",
+		description: "Clear shell rules or session write-directory allows. Usage: /guard-clear [session|directory|repo|global] [all|allow|deny|write|number] [all|number]",
 		handler: async (args, ctx) => {
 			const { scope, value } = splitOptionalScope(args);
 			const parts = value.split(/\s+/).filter(Boolean);
@@ -128,7 +128,7 @@ export function registerGuardCommands(pi: ExtensionAPI, state: GuardCommandState
 				if (!target || target === "all") {
 					rules.splice(0, rules.length);
 					saveSessionRules();
-					ctx.ui.notify(`Cleared session bash ${list} rules.`, "info");
+					ctx.ui.notify(`Cleared session shell ${list} rules.`, "info");
 					return;
 				}
 				const index = Number(target) - 1;

@@ -7,9 +7,10 @@ A small [pi](https://pi.dev) extension that adds a tool guard:
 - Agent bash tool calls are parsed with `tree-sitter-bash` and each individual command is labelled harmless or potentially harmful.
 - Bash allow/deny rules apply to each parsed sub-command, not to the full bash line as one string.
 - Fully harmless agent bash lines are allowed automatically unless a deny rule matches one of their parsed sub-commands.
-- Potentially harmful sub-commands require confirmation, with the dialog showing which parts are harmless, already allowed, or still need approval.
+- Potentially harmful Bash sub-commands require confirmation, with the dialog showing which parts are harmless, already allowed, or still need approval.
+- Agent `powershell` tool calls are also guarded. Until a PowerShell parser is bundled, each complete non-empty PowerShell script is conservatively treated as potentially harmful and requires approval unless a command rule allows it.
 - User-entered `!` / `!!` bash commands are not intercepted by this extension.
-- Agent bash tool calls can be allowed or denied with regex rules at four levels: global config, repo config, directory config, and current session.
+- Agent Bash and PowerShell tool calls can be allowed or denied with regex rules at four levels: global config, repo config, directory config, and current session.
 - Write confirmations can allow the current operation once or add a scoped write-directory rule for the target file's folder or a custom path.
 - Guard prompts send a best-effort desktop notification when the pi terminal is not focused. It includes at most the first two command lines and is dismissed when a decision is made (where supported by the desktop notification service). On Linux, clicking it focuses the relevant terminal window; kitty, Ghostty, WezTerm, and tmux sessions also attempt to select the exact tab or pane.
 - Interactive and RPC modes use the same standard dialog flow (`select` / `input` / `editor`), so permission requests behave consistently and RPC clients can proxy or answer them.
@@ -43,7 +44,7 @@ This extension depends on `tree-sitter` and `tree-sitter-bash`. In plain Node.js
 
 ### Allow and deny rules
 
-Rules default to session scope. Rules are matched against each parsed bash sub-command, not the whole compound line. Operators such as `&&`, `||`, and `|` are only display context in the dialog; exact and regex rules match the underlying sub-command text itself. Session rules are stored in the current pi session log, so they survive `/reload` and quitting/resuming that session, but they do not become project-wide or global defaults. Pass `directory`, `repo`, or `global` as the first argument to persist a rule outside the session.
+Rules default to session scope. Rules are matched against each parsed Bash sub-command, not the whole compound line. For PowerShell, rules match the complete script passed to the tool. Operators such as `&&`, `||`, and `|` are only display context in the Bash dialog; exact and regex rules match the underlying Bash sub-command text itself. Session rules are stored in the current pi session log, so they survive `/reload` and quitting/resuming that session, but they do not become project-wide or global defaults. Pass `directory`, `repo`, or `global` as the first argument to persist a rule outside the session.
 
 ```text
 /guard-allow [session|directory|repo|global] <regex>
@@ -68,7 +69,7 @@ Examples:
 
 ### Persistent session, directory, repo, and global rules
 
-Session bash rules and session write-directory allows are saved as custom entries in the current pi session file. Directory-scoped rules are saved in `.pi/tool-guard.json` under the current pi working directory. Repo-scoped rules are saved in the Git common dir as `pi-tool-guard.json`, which means they are shared by all worktrees of the same repository. In the main worktree that is usually `.git/pi-tool-guard.json`. Global rules are saved in `~/.pi/agent/extensions/tool-guard.json`, or under the directory pointed to by `PI_CODING_AGENT_DIR` when that environment variable is set. Repository and directory configs are loaded only when pi considers the project trusted. For compatibility, older `simple-permissions` config/session entries are still read.
+Session shell command rules (stored under the compatible `bash` key) and session write-directory allows are saved as custom entries in the current pi session file. Directory-scoped rules are saved in `.pi/tool-guard.json` under the current pi working directory. Repo-scoped rules are saved in the Git common dir as `pi-tool-guard.json`, which means they are shared by all worktrees of the same repository. In the main worktree that is usually `.git/pi-tool-guard.json`. Global rules are saved in `~/.pi/agent/extensions/tool-guard.json`, or under the directory pointed to by `PI_CODING_AGENT_DIR` when that environment variable is set. Repository and directory configs are loaded only when pi considers the project trusted. For compatibility, older `simple-permissions` config/session entries are still read.
 
 Use the optional scope argument to persist rules:
 
@@ -83,7 +84,7 @@ Use the optional scope argument to persist rules:
 
 If you are not inside a Git repository, repo scope is unavailable.
 
-The bash confirmation dialog can also save allow rules for each dangerous sub-command at any available scope: session, directory, repo, or global.
+The shell confirmation dialog can also save allow rules for each dangerous Bash sub-command or complete PowerShell script at any available scope: session, directory, repo, or global.
 
 ### Listing and clearing rules
 
@@ -92,11 +93,11 @@ The bash confirmation dialog can also save allow rules for each dangerous sub-co
 /guard-clear [session|directory|repo|global] [all|allow|deny|write|number] [all|number]
 ```
 
-For backwards compatibility, `/guard-clear 2` removes session allow rule #2. Write-directory allows are cleared with `/guard-clear session write all`, `/guard-clear session write 1`, `/guard-clear directory write all`, or `/guard-clear global write 1`. Persistent bash rules are cleared with commands such as `/guard-clear directory allow 2`, `/guard-clear repo allow all`, or `/guard-clear global deny all`.
+For backwards compatibility, `/guard-clear 2` removes session allow rule #2. Write-directory allows are cleared with `/guard-clear session write all`, `/guard-clear session write 1`, `/guard-clear directory write all`, or `/guard-clear global write 1`. Persistent shell command rules are cleared with commands such as `/guard-clear directory allow 2`, `/guard-clear repo allow all`, or `/guard-clear global deny all`.
 
 ## Persistent config format
 
-Persistent config files use the same JSON shape. Bash rules can be plain regex strings or objects with a `source` regex and optional `description`; exact-command commands store anchored escaped regexes. Each bash rule is matched against an individual parsed bash sub-command. Write-directory rules can be plain path strings or objects with a `path` and optional `description`.
+Persistent config files use the same JSON shape. Shell command rules remain under the backwards-compatible `bash` key and can be plain regex strings or objects with a `source` regex and optional `description`; exact-command commands store anchored escaped regexes. Each rule is matched against an individual parsed Bash sub-command or a complete PowerShell script. Write-directory rules can be plain path strings or objects with a `path` and optional `description`.
 
 ```json
 {
@@ -117,7 +118,7 @@ Persistent config files use the same JSON shape. Bash rules can be plain regex s
 }
 ```
 
-Bash deny rules win over allow rules. For bash allows, more-specific scopes are checked before broader scopes: session, directory, repo, then global. Matching happens per parsed sub-command. Write-directory allows apply to writes at or under the configured path.
+Shell command deny rules win over allow rules. For allows, more-specific scopes are checked before broader scopes: session, directory, repo, then global. Matching happens per parsed Bash sub-command or complete PowerShell script. Write-directory allows apply to writes at or under the configured path.
 
 ## Write confirmation dialog
 
@@ -129,16 +130,16 @@ When a write/edit outside the current working directory is requested, the dialog
 - `Folder of this file` allows the target file's containing folder
 - `Custom path` prompts for a path and only saves it if it contains the requested target
 
-## Bash risk analysis and confirmation dialog
+## Shell risk analysis and confirmation dialog
 
 Agent bash tool calls are parsed with Tree-sitter, so compound lines such as `ls && rm -rf tmp` or `git status | grep foo` are analyzed command-by-command instead of as one opaque string. Because an SSH remote command is only an argument from the local shell parser's perspective, the extension separates a static SSH transport through the destination (for example, `ssh host`) from the remote command and parses the latter separately. For example, `ssh host 'ls && rm -rf tmp'` exposes `ssh host`, `ls`, and `rm -rf tmp` to independent risk and rule checks. This lets an exact allow rule trust one SSH host without trusting other hosts or every remote command. Commands containing local expansions that cannot be reconstructed safely remain conservative and are represented by the potentially harmful outer `ssh` invocation only.
 
-Known read-only commands such as `ls`, `cat`, `grep`, `rg`, safe `fd`, safe `find`, safe `sed`, and read-only `git` subcommands are treated as harmless unless they write through shell redirection. Redirecting output to `/dev/null` (for example, `>/dev/null`, `2>/dev/null`, or `&>/dev/null`) remains harmless. `fd`/`fdfind` calls that use exec actions (`-x`/`--exec` or `-X`/`--exec-batch`) are treated as potentially harmful. Unknown commands and known mutating patterns are treated as potentially harmful.
+Known read-only Bash commands such as `ls`, `cat`, `grep`, `rg`, safe `fd`, safe `find`, safe `sed`, and read-only `git` subcommands are treated as harmless unless they write through shell redirection. Redirecting output to `/dev/null` (for example, `>/dev/null`, `2>/dev/null`, or `&>/dev/null`) remains harmless. `fd`/`fdfind` calls that use exec actions (`-x`/`--exec` or `-X`/`--exec-batch`) are treated as potentially harmful. Unknown commands and known mutating patterns are treated as potentially harmful.
 
-When a potentially harmful agent bash tool call is requested, interactive and RPC modes use the same sequential `select` dialogs and a prefilled `editor` for regex rules. The prompt shows each analyzed command part, including any parser error. Each rule-saving request repeats the current sub-command so it remains visible as one dialog replaces the next. Rule saving happens per dangerous parsed sub-command: if some dangerous parts are already allowed by rules, only the remaining dangerous parts are prompted for. For each prompted sub-command, the dialog uses a two-stage flow:
+When a potentially harmful agent Bash or PowerShell tool call is requested, interactive and RPC modes use the same sequential `select` dialogs and a prefilled `editor` for regex rules. PowerShell scripts are currently evaluated as one conservative, potentially harmful command; no PowerShell syntax is assumed harmless. The prompt shows each analyzed command part, including any parser error. Each rule-saving request repeats the current sub-command so it remains visible as one dialog replaces the next. Rule saving happens per dangerous parsed sub-command: if some dangerous parts are already allowed by rules, only the remaining dangerous parts are prompted for. For each prompted sub-command, the dialog uses a two-stage flow:
 
 - Stage 1: `Allow once`, `Deny`, or `Save allow rule`
-- `Allow once` approves the whole bash command once
+- `Allow once` approves the whole shell tool call once
 - `Save allow rule` switches into per-sub-command rule-saving mode, highlighting one dangerous sub-command at a time
 - In that mode you choose scope (`session`, `directory`, `repo`, or `global`) and exact-vs-regex for the highlighted sub-command, then continue to the next remaining dangerous sub-command
 - If you choose regex, it opens an editor showing the current sub-command and prefilled with an exact-match regex; the submitted regex is validated before it is saved
@@ -146,10 +147,10 @@ When a potentially harmful agent bash tool call is requested, interactive and RP
 ## Important caveats
 
 - The policy's CWD is the directory where pi is running. If you start pi in `~/Projects`, then every project under `~/Projects` is considered inside CWD. Start pi inside a specific repo if you want narrower access.
-- Pi does not currently have a separate built-in delete-file tool. Agent deletes usually happen through the `bash` tool (`rm`, etc.), so they are covered by the bash risk analysis and confirmation path rather than path-specific delete analysis. Manually entered `!` / `!!` shell escapes are treated as direct user intent and are not gated by this extension.
+- Pi does not currently have a separate built-in delete-file tool. Agent deletes usually happen through the `bash` or `powershell` tool, so they are covered by the shell confirmation path rather than path-specific delete analysis. Manually entered `!` / `!!` shell escapes are treated as direct user intent and are not gated by this extension.
 - `read`, `ls`, `grep`, `rg`, safe `fd`, and safe `find` are allowed anywhere by this extension. If you want read/list restrictions too, extend the policy to gate those tools.
 - Other custom extensions/tools may mutate files internally and bypass this policy. Only run trusted extensions.
-- Bash risk analysis is conservative, not a sandbox or proof of safety. Unknown commands are considered potentially harmful, while allow rules can bypass analysis.
+- Shell risk analysis is conservative, not a sandbox or proof of safety. Unknown Bash commands and all non-empty PowerShell scripts are considered potentially harmful, while allow rules can bypass analysis.
 - Regex allow rules are powerful. For example, `/guard-allow-exact ssh oakl.ing` allows that SSH transport for the current pi session, while another host is still prompted. Statically reconstructable remote sub-commands are evaluated against their own rules, so the host rule alone does not allow a remote `rm` or other potentially mutating command. A broader `/guard-allow ^ssh\b` rule trusts every parsed SSH transport.
 - Directory/repo/global persistent rules are normal JSON files. Review them before sharing a project, especially directory rules under `.pi/` and repo rules under the shared Git metadata directory. Session rules live in the pi session file.
 - Deny rules are hard blocks and override matching allow rules at any scope.

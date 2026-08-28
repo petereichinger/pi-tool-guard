@@ -8,9 +8,10 @@ Guidance for coding agents working in this repository.
 
 - `write` and `edit` tool calls are allowed inside the current pi working directory.
 - `write` and `edit` outside the current working directory ask the user for confirmation.
-- `bash` tool calls and user `!` / `!!` shell escapes are parsed with `tree-sitter-bash` and classified command-by-command.
-- Known read-only bash commands are allowed automatically.
-- Unknown or potentially mutating bash commands require confirmation unless allowed by a session, directory, repo, or global allow rule, unless a deny rule matches.
+- `bash` tool calls are parsed with `tree-sitter-bash` and classified command-by-command; user `!` / `!!` shell escapes are not gated.
+- `powershell` tool calls are conservatively treated as one potentially harmful script and use the same command-rule and confirmation flow.
+- Known read-only Bash commands are allowed automatically.
+- Unknown or potentially mutating Bash commands and non-empty PowerShell scripts require confirmation unless allowed by a session, directory, repo, or global allow rule, unless a deny rule matches.
 
 This is **not** a sandbox. It is a pi extension that runs with normal user permissions.
 
@@ -58,19 +59,19 @@ When modifying the extension, preserve these policy expectations unless explicit
 1. Reads/list/searches are not gated by this extension.
 2. Only `write` and `edit` tool calls are path-gated.
 3. Paths are canonicalized through existing parents so symlinks cannot make outside-CWD writes look inside CWD.
-4. Bash analysis is conservative: unknown commands should be treated as potentially harmful.
-5. Shell redirection that writes (`>`, `>>`, `&>`, etc.) makes a command potentially harmful.
+4. Shell analysis is conservative: unknown Bash commands and non-empty PowerShell scripts should be treated as potentially harmful.
+5. Bash shell redirection that writes (`>`, `>>`, `&>`, etc.) makes a command potentially harmful.
 6. Session allow/deny rules are persisted as custom entries in the current pi session file, while directory/repo/global allow/deny rules may be persisted in JSON config files.
-7. Deny rules override matching allow rules.
+7. Deny rules override matching allow rules for both Bash sub-commands and complete PowerShell scripts.
 8. Non-UI sessions should block operations that require confirmation.
 
 ## User commands provided by the extension
 
-- `/guard-allow [session|directory|repo|global] <regex>` — allow matching bash commands; scope defaults to session.
-- `/guard-allow-exact [session|directory|repo|global] <command>` — allow one exact bash command; scope defaults to session.
-- `/guard-deny [session|directory|repo|global] <regex>` — deny matching bash commands; scope defaults to session.
-- `/guard-deny-exact [session|directory|repo|global] <command>` — deny one exact bash command; scope defaults to session.
-- `/guard-list [all|session|directory|repo|global]` — list current bash rules.
+- `/guard-allow [session|directory|repo|global] <regex>` — allow matching Bash sub-commands or complete PowerShell scripts; scope defaults to session.
+- `/guard-allow-exact [session|directory|repo|global] <command>` — allow one exact shell command; scope defaults to session.
+- `/guard-deny [session|directory|repo|global] <regex>` — deny matching Bash sub-commands or complete PowerShell scripts; scope defaults to session.
+- `/guard-deny-exact [session|directory|repo|global] <command>` — deny one exact shell command; scope defaults to session.
+- `/guard-list [all|session|directory|repo|global]` — list current shell rules.
 - `/guard-clear [session|directory|repo|global] [all|allow|deny|number] [all|number]` — clear rules; scope defaults to session.
 
 ## Development notes

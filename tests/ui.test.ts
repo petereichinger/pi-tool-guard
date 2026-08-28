@@ -63,4 +63,40 @@ for (const mode of ["tui", "rpc"] as const) {
 		assert.equal(requests[1]!.title, "Save bash allow rule scope\n\nCommand: npm install foo");
 		assert.equal(requests[2]!.title, "Save bash allow rule mode\n\nCommand: npm install foo");
 	});
+
+	test(`${mode} PowerShell permissions identify the guarded shell`, async () => {
+		const requests: Array<{ title: string; options: string[] }> = [];
+		const ctx = {
+			mode,
+			ui: {
+				select: async (title: string, options: string[]) => {
+					requests.push({ title, options });
+					return "Deny";
+				},
+			},
+		};
+		const command = "Remove-Item tmp";
+		const evaluatedCommand = {
+			index: 0,
+			command,
+			name: "powershell",
+			harmless: false,
+			reason: "PowerShell scripts require explicit approval",
+			allowedOnce: false,
+		};
+
+		const decision = await selectBashDecision(
+			ctx,
+			{ commands: [evaluatedCommand], pendingDangerous: [evaluatedCommand] },
+			{ parserAvailable: true, commands: [evaluatedCommand] },
+			0,
+			{ repoLocation: undefined } as any,
+			"action",
+			undefined,
+			"PowerShell",
+		);
+
+		assert.deepEqual(decision, { type: "block" });
+		assert.match(requests[0]!.title, /^Allow powershell command\?/);
+	});
 }

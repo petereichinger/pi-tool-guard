@@ -37,5 +37,11 @@
     "extensions": [
       "./extensions/tool-guard.ts"
     ]
+  },
+  "allowScripts": {
+    "@google/genai@1.52.0": true,
+    "protobufjs@7.6.5": true,
+    "tree-sitter@0.21.1": true,
+    "tree-sitter-bash@0.23.3": true
   }
 }

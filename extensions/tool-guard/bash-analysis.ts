@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import {
 	FD_EXEC_FLAGS,
 	FD_SHORT_OPTIONS_WITH_VALUES,
@@ -5,6 +6,7 @@ import {
 	GIT_READ_ONLY_SUBCOMMANDS,
 	READ_ONLY_COMMANDS,
 } from "./constants.ts";
+import { canonicalizeForPolicy, isInside, realpathOrResolve } from "./path-policy.ts";
 import { getBashParser } from "./tree-sitter.ts";
 import type { BashAnalysis, BashCommandRisk } from "./types.ts";
 
@@ -80,7 +82,7 @@ function fdExecutingFlag(args: string[]): string | undefined {
 	return undefined;
 }
 
-function riskForCommand(node: any, splitter?: string): BashCommandRisk {
+async function riskForCommand(node: any, splitter?: string, cwd?: string): Promise<BashCommandRisk> {
 	const segmentNode = getCommandSegmentNode(node);
 	const command = segmentNode.text.trim();
 	const name = getCommandName(node) ?? "assignment";
@@ -92,6 +94,37 @@ function riskForCommand(node: any, splitter?: string): BashCommandRisk {
 		return withSplitter({ command, name, harmless: false, reason: "writes via shell redirection" });
 	}
 	if (name === "assignment") return withSplitter({ command, name, harmless: true, reason: "variable assignment only" });
+
+	if (name === "cd") {
+		if (!cwd) return withSplitter({ command, name, harmless: false, reason: "cd destination cannot be checked" });
+		const values = commandArgumentNodes(node).map((argument) => staticShellWord(argument.text));
+		if (values.some((value) => value === undefined)) {
+			return withSplitter({ command, name, harmless: false, reason: "cd destination uses shell expansion" });
+		}
+		const args = values as string[];
+		let target: string | undefined;
+		let optionsEnded = false;
+		for (const arg of args) {
+			if (!optionsEnded && arg === "--") {
+				optionsEnded = true;
+				continue;
+			}
+			if (!optionsEnded && arg.startsWith("-") && arg !== "-") continue;
+			if (target !== undefined) {
+				return withSplitter({ command, name, harmless: false, reason: "cd has an ambiguous destination" });
+			}
+			target = arg;
+		}
+		if (!target || target === "-") {
+			return withSplitter({ command, name, harmless: false, reason: "cd destination cannot be checked" });
+		}
+		const cwdReal = await realpathOrResolve(cwd);
+		const targetReal = await canonicalizeForPolicy(resolve(cwd, target));
+		return isInside(cwdReal, targetReal)
+			? withSplitter({ command, name, harmless: true, reason: "cd stays inside current working directory" })
+			: withSplitter({ command, name, harmless: false, reason: "cd leaves current working directory" });
+	}
+
 	if (!READ_ONLY_COMMANDS.has(name)) return withSplitter({ command, name, harmless: false, reason: `unknown or mutating command: ${name}` });
 
 	if (name === "git") {
@@ -255,7 +288,7 @@ function sshCommandParts(node: any): { transport: string; remote: string } | und
 	return { transport: node.text.slice(0, transportEnd).trim(), remote };
 }
 
-function risksForParsedCommand(command: string, parser: any, depth = 0): BashCommandRisk[] {
+async function risksForParsedCommand(command: string, parser: any, depth = 0, cwd?: string): Promise<BashCommandRisk[]> {
 	const tree = parser.parse(command);
 	const nodes: any[] = [];
 	collectCommandNodes(tree.rootNode, nodes);
@@ -265,13 +298,13 @@ function risksForParsedCommand(command: string, parser: any, depth = 0): BashCom
 	for (const node of sortedNodes) {
 		const splitter = command.slice(previousEnd, node.startIndex).trim();
 		previousEnd = getCommandSegmentNode(node).endIndex;
-		let risk = riskForCommand(node, splitter || undefined);
+		let risk = await riskForCommand(node, splitter || undefined, cwd);
 		const sshParts = depth < 4 ? sshCommandParts(node) : undefined;
 		if (sshParts) risk = { ...risk, command: sshParts.transport };
 		risks.push(risk);
 
 		if (!sshParts) continue;
-		const remoteRisks = risksForParsedCommand(sshParts.remote, parser, depth + 1);
+		const remoteRisks = await risksForParsedCommand(sshParts.remote, parser, depth + 1);
 		if (remoteRisks.length > 0) {
 			remoteRisks[0] = { ...remoteRisks[0], splitter: "ssh remote →" };
 			risks.push(...remoteRisks);
@@ -280,7 +313,7 @@ function risksForParsedCommand(command: string, parser: any, depth = 0): BashCom
 	return risks;
 }
 
-export async function analyzeBash(command: string): Promise<BashAnalysis> {
+export async function analyzeBash(command: string, cwd: string = process.cwd()): Promise<BashAnalysis> {
 	const { parser, error: loadError } = await getBashParser();
 	if (!parser) {
 		return {
@@ -291,7 +324,7 @@ export async function analyzeBash(command: string): Promise<BashAnalysis> {
 	}
 
 	try {
-		return { parserAvailable: true, commands: risksForParsedCommand(command, parser) };
+		return { parserAvailable: true, commands: await risksForParsedCommand(command, parser, 0, cwd) };
 	} catch (error: any) {
 		return {
 			parserAvailable: false,

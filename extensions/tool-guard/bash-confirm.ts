@@ -19,7 +19,7 @@ export async function confirmShell(
 ) {
 	let activeConfig = config;
 	const shellLabel = shell === "powershell" ? "PowerShell" : "Bash";
-	const analysis = shell === "powershell" ? analyzePowerShell(command) : await analyzeBash(command);
+	const analysis = shell === "powershell" ? analyzePowerShell(command) : await analyzeBash(command, ctx.cwd);
 	const allHarmless = analysis.commands.every((item) => item.harmless);
 	if (allHarmless) {
 		const harmlessEvaluation = evaluateBashAnalysis(analysis, new Set<number>(), bashAllowRules, bashDenyRules, activeConfig);

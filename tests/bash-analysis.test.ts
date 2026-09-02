@@ -1,7 +1,39 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { analyzeBash } from "../extensions/tool-guard/bash-analysis.ts";
+
+test("allows cd into the current directory or a subdirectory", async (t) => {
+	const cwd = await mkdtemp(join(tmpdir(), "tool-guard-cd-"));
+	const child = join(cwd, "nested folder");
+	await mkdir(child);
+	t.after(() => rm(cwd, { recursive: true, force: true }));
+
+	for (const target of [cwd, child]) {
+		const analysis = await analyzeBash(`cd "${target.replaceAll("\\", "/")}"`, cwd);
+		assert.deepEqual(analysis.commands.map(({ name, harmless, reason }) => ({ name, harmless, reason })), [
+			{ name: "cd", harmless: true, reason: "cd stays inside current working directory" },
+		]);
+	}
+});
+
+test("does not automatically allow cd outside the current directory or to a dynamic destination", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "tool-guard-cd-"));
+	try {
+		const outside = await analyzeBash("cd ..", cwd);
+		assert.equal(outside.commands[0].harmless, false);
+		assert.equal(outside.commands[0].reason, "cd leaves current working directory");
+
+		const dynamic = await analyzeBash('cd "$TARGET"', cwd);
+		assert.equal(dynamic.commands[0].harmless, false);
+		assert.equal(dynamic.commands[0].reason, "cd destination uses shell expansion");
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
 
 test("allows a read-only command that discards output to /dev/null", async () => {
 	for (const redirect of [">/dev/null", "2>/dev/null", "&>/dev/null"]) {

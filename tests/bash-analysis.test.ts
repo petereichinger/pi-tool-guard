@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { analyzeBash } from "../extensions/tool-guard/bash-analysis.ts";
+import { analyzeBash, normalizeCdTargetForHost } from "../extensions/tool-guard/bash-analysis.ts";
+
+test("normalizes MSYS drive paths only on Windows", () => {
+	assert.equal(normalizeCdTargetForHost("/d/source/repo", "win32"), "D:/source/repo");
+	assert.equal(normalizeCdTargetForHost("/d", "win32"), "D:/");
+	assert.equal(normalizeCdTargetForHost("/home/user/repo", "win32"), "/home/user/repo");
+	assert.equal(normalizeCdTargetForHost("/d/source/repo", "linux"), "/d/source/repo");
+});
 
 test("allows cd into the current directory or a subdirectory", async (t) => {
 	const cwd = await mkdtemp(join(tmpdir(), "tool-guard-cd-"));
@@ -12,7 +19,9 @@ test("allows cd into the current directory or a subdirectory", async (t) => {
 	await mkdir(child);
 	t.after(() => rm(cwd, { recursive: true, force: true }));
 
-	for (const target of [cwd, child]) {
+	const targets = [cwd, child];
+	if (process.platform === "win32") targets.push(child.replace(/^([a-zA-Z]):[\\/]/, (_match, drive) => `/${drive.toLowerCase()}/`).replaceAll("\\", "/"));
+	for (const target of targets) {
 		const analysis = await analyzeBash(`cd "${target.replaceAll("\\", "/")}"`, cwd);
 		assert.deepEqual(analysis.commands.map(({ name, harmless, reason }) => ({ name, harmless, reason })), [
 			{ name: "cd", harmless: true, reason: "cd stays inside current working directory" },

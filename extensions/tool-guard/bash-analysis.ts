@@ -10,6 +10,12 @@ import { canonicalizeForPolicy, isInside, realpathOrResolve } from "./path-polic
 import { getBashParser } from "./tree-sitter.ts";
 import type { BashAnalysis, BashCommandRisk } from "./types.ts";
 
+export function normalizeCdTargetForHost(target: string, platform: NodeJS.Platform = process.platform): string {
+	if (platform !== "win32") return target;
+	const msysDrivePath = target.match(/^\/([a-zA-Z])(?:\/(.*))?$/);
+	return msysDrivePath ? `${msysDrivePath[1].toUpperCase()}:/${msysDrivePath[2] ?? ""}` : target;
+}
+
 function stripShellQuotes(value: string): string {
 	if (value.length >= 2) {
 		const first = value[0];
@@ -119,7 +125,7 @@ async function riskForCommand(node: any, splitter?: string, cwd?: string): Promi
 			return withSplitter({ command, name, harmless: false, reason: "cd destination cannot be checked" });
 		}
 		const cwdReal = await realpathOrResolve(cwd);
-		const targetReal = await canonicalizeForPolicy(resolve(cwd, target));
+		const targetReal = await canonicalizeForPolicy(resolve(cwd, normalizeCdTargetForHost(target)));
 		return isInside(cwdReal, targetReal)
 			? withSplitter({ command, name, harmless: true, reason: "cd stays inside current working directory" })
 			: withSplitter({ command, name, harmless: false, reason: "cd leaves current working directory" });

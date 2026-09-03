@@ -3,8 +3,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { confirmShell } from "./bash-confirm.ts";
 import { registerGuardCommands } from "./commands.ts";
 import { WRITING_TOOLS, SESSION_RULES_ENTRY_TYPE } from "./constants.ts";
-import { addPersistentWriteDirectory, loadConfigs } from "./config-store.ts";
+import { addPersistentWriteDirectory, invalidateConfigCache, loadConfigs } from "./config-store.ts";
 import { canonicalizeForPolicy, isInside, realpathOrResolve, stripAtPrefix } from "./path-policy.ts";
+import { createPermissionRequestRunner } from "./permission-queue.ts";
 import type { HerdrInputStatusReporter } from "./herdr-status.ts";
 import { persistedSessionRules, loadSessionRules } from "./session-rules.ts";
 import { setupTerminalFocusTracking } from "./terminal-focus.ts";
@@ -19,6 +20,11 @@ export default function toolGuard(pi: ExtensionAPI) {
 	const bashDenyRules: BashRule[] = [];
 	const writeAllowDirectories: string[] = [];
 	let sessionRuleErrors: string[] = [];
+	const runPermissionRequest = createPermissionRequestRunner();
+	const reloadConfigs = async (ctx: any) => {
+		invalidateConfigCache();
+		return loadConfigs(ctx);
+	};
 	const reportHerdrInputStatus: HerdrInputStatusReporter = (active, label) => {
 		pi.events.emit("herdr:blocked", { active, label });
 	};
@@ -73,7 +79,7 @@ export default function toolGuard(pi: ExtensionAPI) {
 	pi.on("tool_call", async (event, ctx) => {
 		if (event.toolName === "bash" || event.toolName === "powershell") {
 			const command = String((event.input as any).command ?? "");
-			const config = await loadConfigs(ctx);
+			const config = await reloadConfigs(ctx);
 			return confirmShell(
 				ctx,
 				event.toolName,
@@ -83,6 +89,8 @@ export default function toolGuard(pi: ExtensionAPI) {
 				config,
 				saveSessionRules,
 				reportHerdrInputStatus,
+				runPermissionRequest,
+				() => reloadConfigs(ctx),
 			);
 		}
 
@@ -96,20 +104,25 @@ export default function toolGuard(pi: ExtensionAPI) {
 		const targetReal = await canonicalizeForPolicy(absolutePath);
 
 		if (isInside(cwdReal, targetReal)) return undefined;
-		if (writeAllowDirectories.some((directory) => isInside(directory, targetReal))) return undefined;
 
-		const config = await loadConfigs(ctx);
-		if (config.writeAllowDirectories.some((rule) => isInside(rule.path, targetReal))) return undefined;
+		return runPermissionRequest(async () => {
+			// Recheck after earlier permission requests have completed. Their newly
+			// saved session or persistent rules may already permit this write.
+			if (writeAllowDirectories.some((directory) => isInside(directory, targetReal))) return undefined;
 
-		return confirmFileMutation(
-			ctx,
-			event.toolName,
-			inputPath,
-			targetReal,
-			cwdReal,
-			config,
-			(scope, path) => addWriteAllowDirectory(ctx, scope, path),
-			reportHerdrInputStatus,
-		);
+			const config = await reloadConfigs(ctx);
+			if (config.writeAllowDirectories.some((rule) => isInside(rule.path, targetReal))) return undefined;
+
+			return confirmFileMutation(
+				ctx,
+				event.toolName,
+				inputPath,
+				targetReal,
+				cwdReal,
+				config,
+				(scope, path) => addWriteAllowDirectory(ctx, scope, path),
+				reportHerdrInputStatus,
+			);
+		});
 	});
 }

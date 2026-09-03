@@ -4,8 +4,11 @@ import { evaluateBashAnalysis } from "./bash-evaluation.ts";
 import { analyzePowerShell } from "./powershell-analysis.ts";
 import { addExactRule, exactRuleSource, formatDisplayedBashCommand, ruleLabel } from "./rule-utils.ts";
 import type { HerdrInputStatusReporter } from "./herdr-status.ts";
+import type { PermissionRequestRunner } from "./permission-queue.ts";
 import { editRegexRule, selectBashDecision } from "./ui.ts";
 import type { BashRule, LoadedConfigState } from "./types.ts";
+
+const runImmediately: PermissionRequestRunner = (request) => request();
 
 export async function confirmShell(
 	ctx: any,
@@ -16,6 +19,8 @@ export async function confirmShell(
 	config: LoadedConfigState,
 	onSessionRulesChanged: () => void = () => {},
 	reportHerdrInputStatus?: HerdrInputStatusReporter,
+	runPermissionRequest: PermissionRequestRunner = runImmediately,
+	reloadConfig?: () => Promise<LoadedConfigState>,
 ) {
 	let activeConfig = config;
 	const shellLabel = shell === "powershell" ? "PowerShell" : "Bash";
@@ -33,10 +38,15 @@ export async function confirmShell(
 		return undefined;
 	}
 
-	const allowedOnceIndexes = new Set<number>();
-	let promptStage: "action" | "save" = "action";
-	while (true) {
-		const evaluation = evaluateBashAnalysis(analysis, allowedOnceIndexes, bashAllowRules, bashDenyRules, activeConfig);
+	return runPermissionRequest(async () => {
+		// This request may have waited behind another agent's prompt. Reload
+		// persistent rules before evaluating it so newly saved rules take effect.
+		if (reloadConfig) activeConfig = await reloadConfig();
+
+		const allowedOnceIndexes = new Set<number>();
+		let promptStage: "action" | "save" = "action";
+		while (true) {
+			const evaluation = evaluateBashAnalysis(analysis, allowedOnceIndexes, bashAllowRules, bashDenyRules, activeConfig);
 		if (evaluation.denied) {
 			return {
 				block: true,
@@ -115,9 +125,10 @@ export async function confirmShell(
 				continue;
 			}
 			return { block: true, reason: `Added regex /${source}/ does not match this sub-command: ${target.command}` } as const;
-		} catch (error: any) {
-			ctx.ui.notify(`Invalid regex: ${error.message}`, "error");
-			return { block: true, reason: `Invalid regex: ${error.message}` } as const;
+			} catch (error: any) {
+				ctx.ui.notify(`Invalid regex: ${error.message}`, "error");
+				return { block: true, reason: `Invalid regex: ${error.message}` } as const;
+			}
 		}
-	}
+	});
 }

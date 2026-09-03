@@ -92,7 +92,6 @@ for (const mode of ["tui", "rpc"] as const) {
 			0,
 			{ repoLocation: undefined } as any,
 			"action",
-			undefined,
 			"PowerShell",
 		);
 

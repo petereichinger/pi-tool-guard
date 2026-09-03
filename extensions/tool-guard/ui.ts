@@ -1,6 +1,5 @@
 import { dirname, resolve } from "node:path";
 import { notifyGuardPrompt } from "./desktop-notify.ts";
-import { withHerdrInputStatus, type HerdrInputStatusReporter } from "./herdr-status.ts";
 import { canonicalizeForPolicy, isInside, stripAtPrefix } from "./path-policy.ts";
 import { formatDisplayedBashCommand } from "./rule-utils.ts";
 import type {
@@ -22,10 +21,9 @@ export async function editRegexRule(
 	title: string,
 	subCommand: string,
 	initialValue: string,
-	reportHerdrInputStatus?: HerdrInputStatusReporter,
 ): Promise<string | undefined> {
 	const contextualTitle = `${title}\n\nCommand: ${subCommand}`;
-	return withHerdrInputStatus(() => ctx.ui.editor(contextualTitle, initialValue), undefined, reportHerdrInputStatus);
+	return ctx.ui.editor(contextualTitle, initialValue);
 }
 
 async function selectFileMutationDecisionDialog(
@@ -56,7 +54,6 @@ export async function confirmFileMutation(
 	_cwdReal: string,
 	config: LoadedConfigState,
 	addAllowedDirectory: (scope: BashRuleScope, path: string) => Promise<void>,
-	reportHerdrInputStatus?: HerdrInputStatusReporter,
 ) {
 	if (!ctx.hasUI) return { block: true, reason: `Write/edit outside CWD blocked: ${targetReal}` } as const;
 
@@ -68,11 +65,7 @@ export async function confirmFileMutation(
 	];
 	const scopeChoices: BashRuleScope[] = ["session", "directory", ...(config.repoLocation ? (["repo"] as const) : []), "global"];
 
-	const decision = await withHerdrInputStatus(
-		() => selectFileMutationDecisionDialog(ctx, targetReal, actionChoices, scopeChoices),
-		undefined,
-		reportHerdrInputStatus,
-	)
+	const decision = await selectFileMutationDecisionDialog(ctx, targetReal, actionChoices, scopeChoices)
 		.finally(() => notification.dismiss());
 
 	if (!decision || decision.type === "block") return { block: true, reason: "Blocked by user" } as const;
@@ -80,11 +73,7 @@ export async function confirmFileMutation(
 
 	let allowedPath = dirname(targetReal);
 	if (decision.mode === "custom") {
-		const input = await withHerdrInputStatus(
-			() => ctx.ui.input("Path to allow writes under", allowedPath),
-			undefined,
-			reportHerdrInputStatus,
-		);
+		const input = await ctx.ui.input("Path to allow writes under", allowedPath);
 		if (!input) return { block: true, reason: "Blocked by user" } as const;
 		allowedPath = await canonicalizeForPolicy(resolve(ctx.cwd, stripAtPrefix(input)));
 	}
@@ -113,7 +102,6 @@ export async function selectBashDecision(
 	targetIndex: number,
 	config: LoadedConfigState,
 	initialStage: "action" | "save" = "action",
-	reportHerdrInputStatus?: HerdrInputStatusReporter,
 	shellLabel = "Bash",
 ): Promise<BashDialogDecision | undefined> {
 	const actionChoices: DialogChoice<BashDialogDecision>[] = [
@@ -126,11 +114,7 @@ export async function selectBashDecision(
 	const notification = notifyGuardPrompt(`${shellLabel} permission needed:\n${promptedCommand ? formatDisplayedBashCommand(promptedCommand) : "dangerous command"}`);
 
 	try {
-		return await withHerdrInputStatus(
-			() => selectBashDecisionDialog(ctx, evaluation, analysis, targetIndex, actionChoices, scopeChoices, initialStage, shellLabel),
-			undefined,
-			reportHerdrInputStatus,
-		);
+		return await selectBashDecisionDialog(ctx, evaluation, analysis, targetIndex, actionChoices, scopeChoices, initialStage, shellLabel);
 	} finally {
 		notification.dismiss();
 	}

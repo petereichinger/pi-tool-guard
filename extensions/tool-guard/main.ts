@@ -6,7 +6,6 @@ import { WRITING_TOOLS, SESSION_RULES_ENTRY_TYPE } from "./constants.ts";
 import { addPersistentWriteDirectory, invalidateConfigCache, loadConfigs } from "./config-store.ts";
 import { canonicalizeForPolicy, isInside, realpathOrResolve, stripAtPrefix } from "./path-policy.ts";
 import { createPermissionRequestRunner } from "./permission-queue.ts";
-import type { HerdrInputStatusReporter } from "./herdr-status.ts";
 import { persistedSessionRules, loadSessionRules } from "./session-rules.ts";
 import { setupTerminalFocusTracking } from "./terminal-focus.ts";
 import { confirmFileMutation } from "./ui.ts";
@@ -25,10 +24,6 @@ export default function toolGuard(pi: ExtensionAPI) {
 		invalidateConfigCache();
 		return loadConfigs(ctx);
 	};
-	const reportHerdrInputStatus: HerdrInputStatusReporter = (active, label) => {
-		pi.events.emit("herdr:blocked", { active, label });
-	};
-
 	const saveSessionRules = () => {
 		sessionRuleErrors = [];
 		pi.appendEntry(SESSION_RULES_ENTRY_TYPE, persistedSessionRules(bashAllowRules, bashDenyRules, writeAllowDirectories));
@@ -88,7 +83,6 @@ export default function toolGuard(pi: ExtensionAPI) {
 				bashDenyRules,
 				config,
 				saveSessionRules,
-				reportHerdrInputStatus,
 				runPermissionRequest,
 				() => reloadConfigs(ctx),
 			);
@@ -121,7 +115,6 @@ export default function toolGuard(pi: ExtensionAPI) {
 				cwdReal,
 				config,
 				(scope, path) => addWriteAllowDirectory(ctx, scope, path),
-				reportHerdrInputStatus,
 			);
 		});
 	});

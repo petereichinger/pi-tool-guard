@@ -63,7 +63,6 @@ test("queued permission requests recheck rules saved by an earlier agent", async
 		[],
 		config,
 		undefined,
-		undefined,
 		runPermissionRequest,
 		async () => config,
 	);
@@ -87,7 +86,6 @@ test("a permission request reloads persistent rules before prompting", async () 
 		[],
 		[],
 		config,
-		undefined,
 		undefined,
 		undefined,
 		async () => refreshedConfig,

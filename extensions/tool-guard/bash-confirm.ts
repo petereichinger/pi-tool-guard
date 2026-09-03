@@ -3,7 +3,6 @@ import { analyzeBash, formatBashAnalysis } from "./bash-analysis.ts";
 import { evaluateBashAnalysis } from "./bash-evaluation.ts";
 import { analyzePowerShell } from "./powershell-analysis.ts";
 import { addExactRule, exactRuleSource, formatDisplayedBashCommand, ruleLabel } from "./rule-utils.ts";
-import type { HerdrInputStatusReporter } from "./herdr-status.ts";
 import type { PermissionRequestRunner } from "./permission-queue.ts";
 import { editRegexRule, selectBashDecision } from "./ui.ts";
 import type { BashRule, LoadedConfigState } from "./types.ts";
@@ -18,7 +17,6 @@ export async function confirmShell(
 	bashDenyRules: BashRule[],
 	config: LoadedConfigState,
 	onSessionRulesChanged: () => void = () => {},
-	reportHerdrInputStatus?: HerdrInputStatusReporter,
 	runPermissionRequest: PermissionRequestRunner = runImmediately,
 	reloadConfig?: () => Promise<LoadedConfigState>,
 ) {
@@ -70,7 +68,6 @@ export async function confirmShell(
 			target.index,
 			activeConfig,
 			promptStage,
-			reportHerdrInputStatus,
 			shellLabel,
 		);
 		promptStage = "action";
@@ -103,7 +100,6 @@ export async function confirmShell(
 			`${shellLabel} allow regex for command`,
 			target.command,
 			exactRuleSource(target.command),
-			reportHerdrInputStatus,
 		))?.trim();
 		if (!source) return { block: true, reason: "Blocked by user" } as const;
 

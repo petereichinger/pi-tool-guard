@@ -1,6 +1,6 @@
 # pi-tool-guard
 
-A small [pi](https://pi.dev) extension that adds a tool guard:
+A small [pi](https://pi.dev) extension that adds a tool guard. **pi 0.84.4 or newer is required.**
 
 - Files inside the current working directory can be read, written, edited, and created without prompting.
 - `write` / `edit` outside the current working directory require confirmation unless they are under a scoped write-directory allow rule.
@@ -15,11 +15,13 @@ A small [pi](https://pi.dev) extension that adds a tool guard:
 - Guard prompts send a best-effort desktop notification when the pi terminal is not focused. It includes at most the first two command lines and is dismissed when a decision is made (where supported by the desktop notification service). On Linux, clicking it focuses the relevant terminal window; kitty, Ghostty, WezTerm, and tmux sessions also attempt to select the exact tab or pane.
 - Interactive and RPC modes use the same standard dialog flow (`select` / `input` / `editor`), so permission requests behave consistently and RPC clients can proxy or answer them.
 - Concurrent permission requests are handled one at a time and recheck current rules when their turn begins, so a rule saved for one agent can automatically satisfy another agent's queued request.
-- When running in a [Herdr](https://herdr.dev) pane, active guard dialogs are reported as `blocked` / waiting for input and released when the dialog closes. Herdr remains optional; its absence or a reporting failure never affects permission decisions.
+- When running in a [Herdr](https://herdr.dev) pane, pi's native `ui_prompt_start` / `ui_prompt_end` lifecycle reports active guard dialogs as waiting for input. Tool Guard does not invoke `herdr pane report-agent` or maintain a separate Herdr state source. Herdr remains optional.
 
 > This is a convenience guard, not a security sandbox. Pi extensions run with your full user permissions. For hard isolation, use OS permissions, containers, VMs, or sandboxing.
 
 ## Install
+
+This package requires pi 0.84.4 or newer because it relies on pi's native UI prompt lifecycle.
 
 After this repo is pushed to GitHub:
 

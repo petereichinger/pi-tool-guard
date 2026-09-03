@@ -31,7 +31,7 @@
     "tree-sitter-bash": "^0.23.3"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": ">=0.84.4"
   },
   "pi": {
     "extensions": [

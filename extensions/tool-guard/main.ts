@@ -14,6 +14,21 @@ import type { BashRule, BashRuleScope, PersistentBashRuleScope } from "./types.t
 const POLICY_PROMPT =
 	"\n\nPermission policy active: read/list/search tools are allowed; write/edit targets inside the current working directory are allowed; write/edit targets outside the current working directory require user confirmation unless they are under a scoped write-directory allow rule; agent bash and PowerShell tool calls are guarded. Bash calls are parsed with tree-sitter-bash and classified command-by-command; PowerShell calls conservatively require approval as a complete script. Command allow/deny rules apply to each parsed Bash sub-command or complete PowerShell script. Fully harmless Bash lines are allowed automatically unless a deny rule matches. Potentially harmful commands require approval unless they match a session, directory, repo, or global allow regex. Matching deny regexes override allows and block the shell tool call.";
 
+export function registerHerdrPromptBridge(pi: ExtensionAPI) {
+	// Herdr's pi integration owns agent-state reporting and listens on pi's
+	// shared event bus. Bridge pi's native prompt lifecycle so an active guard
+	// dialog supersedes the agent's normal "working" state.
+	pi.on("ui_prompt_start", (event) => {
+		pi.events.emit("herdr:blocked", {
+			active: true,
+			label: event.title || "Waiting for tool-guard approval",
+		});
+	});
+	pi.on("ui_prompt_end", () => {
+		pi.events.emit("herdr:blocked", { active: false });
+	});
+}
+
 export default function toolGuard(pi: ExtensionAPI) {
 	const bashAllowRules: BashRule[] = [];
 	const bashDenyRules: BashRule[] = [];
@@ -51,6 +66,8 @@ export default function toolGuard(pi: ExtensionAPI) {
 		saveSessionRules,
 		getSessionRuleErrors: () => sessionRuleErrors,
 	});
+
+	registerHerdrPromptBridge(pi);
 
 	pi.on("session_start", async (_event, ctx) => {
 		setupTerminalFocusTracking(ctx);

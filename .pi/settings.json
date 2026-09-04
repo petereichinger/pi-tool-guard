@@ -1,9 +1,0 @@
-{
-	"packages": [
-		"..",
-		{
-			"source": "git:github.com/petereichinger/pi-tool-guard",
-			"extensions": []
-		}
-	]
-}

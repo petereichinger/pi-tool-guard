@@ -52,7 +52,9 @@ This extension depends on `tree-sitter` and `tree-sitter-bash`. In plain Node.js
 /yolo
 ```
 
-`/yolo` toggles YOLO mode for the current extension runtime. While it is enabled, Tool Guard allows all shell calls and file mutations without checking allow or deny rules and without asking for confirmation. The footer shows `YOLO` while the mode is active. Run `/yolo` again to disable it. YOLO mode is not persisted and resets when the session runtime starts or reloads.
+`/yolo` toggles YOLO mode for the current extension runtime. While it is enabled, Tool Guard allows all shell calls and file mutations without checking allow or deny rules and without asking for confirmation. The footer shows `YOLO` while the mode is active. Run `/yolo` again to disable it.
+
+While YOLO mode is active, Tool Guard sets `PI_TOOL_GUARD_YOLO=1` in the pi process. Newly spawned child pi processes inherit it and start with YOLO mode enabled. This includes workers launched by `pi-delegate-workers`, so their proxied permission dialogs are skipped. A child can pass the mode to its own descendants in the same way. Tool Guard removes the variable when YOLO mode is disabled or the current session shuts down. The mode is not stored in session data and resets on reload or session replacement.
 
 ### Allow and deny rules
 

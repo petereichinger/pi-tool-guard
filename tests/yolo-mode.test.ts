@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import toolGuard from "../extensions/tool-guard/main.ts";
-import { registerYoloMode } from "../extensions/tool-guard/yolo-mode.ts";
+import { registerYoloMode, YOLO_ENVIRONMENT_VARIABLE } from "../extensions/tool-guard/yolo-mode.ts";
 
 test("the yolo command toggles temporary bypass state and footer status", async () => {
+	delete process.env[YOLO_ENVIRONMENT_VARIABLE];
 	const commands = new Map<string, any>();
 	const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
 	const statuses: Array<string | undefined> = [];
@@ -31,18 +32,48 @@ test("the yolo command toggles temporary bypass state and footer status", async 
 
 	await command.handler("", ctx);
 	assert.equal(yoloMode.isEnabled(), true);
+	assert.equal(process.env[YOLO_ENVIRONMENT_VARIABLE], "1");
 	assert.equal(statuses.at(-1), "[warning]YOLO");
 	assert.deepEqual(notifications.at(-1), { message: "YOLO mode enabled.", level: "warning" });
 
 	await command.handler("", ctx);
 	assert.equal(yoloMode.isEnabled(), false);
+	assert.equal(process.env[YOLO_ENVIRONMENT_VARIABLE], undefined);
 	assert.equal(statuses.at(-1), undefined);
 	assert.deepEqual(notifications.at(-1), { message: "YOLO mode disabled.", level: "info" });
 
 	await command.handler("", ctx);
 	await handlers.get("session_start")?.({}, ctx);
 	assert.equal(yoloMode.isEnabled(), false);
+	assert.equal(process.env[YOLO_ENVIRONMENT_VARIABLE], undefined);
 	assert.equal(statuses.at(-1), undefined);
+});
+
+test("an inherited yolo environment enables a newly spawned pi runtime", async () => {
+	process.env[YOLO_ENVIRONMENT_VARIABLE] = "1";
+	const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
+	const statuses: Array<string | undefined> = [];
+	const pi = {
+		registerCommand: () => {},
+		on(name: string, handler: (event: any, ctx: any) => Promise<void>) {
+			handlers.set(name, handler);
+		},
+	};
+	const ctx = {
+		ui: {
+			theme: { fg: (_color: string, text: string) => `[warning]${text}` },
+			setStatus: (_id: string, value: string | undefined) => statuses.push(value),
+		},
+	};
+	const yoloMode = registerYoloMode(pi as any);
+
+	await handlers.get("session_start")?.({ reason: "startup" }, ctx);
+	assert.equal(yoloMode.isEnabled(), true);
+	assert.equal(statuses.at(-1), "[warning]YOLO");
+
+	await handlers.get("session_shutdown")?.({}, ctx);
+	assert.equal(yoloMode.isEnabled(), false);
+	assert.equal(process.env[YOLO_ENVIRONMENT_VARIABLE], undefined);
 });
 
 test("tool-guard bypasses shell and file mutation checks while yolo mode is enabled", async () => {

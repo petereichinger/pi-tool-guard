@@ -2,6 +2,48 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { editRegexRule, selectBashDecision } from "../extensions/tool-guard/ui.ts";
 
+test("permission prompts use semantic theme colors", async () => {
+	let request: { title: string; options: string[] } | undefined;
+	const theme = {
+		fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+		bold: (text: string) => `<bold>${text}</bold>`,
+	};
+	const ctx = {
+		ui: {
+			theme,
+			select: async (title: string, options: string[]) => {
+				request = { title, options };
+				return options[1];
+			},
+		},
+	};
+	const evaluatedCommand = {
+		index: 0,
+		command: "npm install foo",
+		name: "npm",
+		harmless: false,
+		reason: "unknown command",
+		allowedOnce: false,
+	};
+
+	const decision = await selectBashDecision(
+		ctx,
+		{ commands: [evaluatedCommand], pendingDangerous: [evaluatedCommand] },
+		{ parserAvailable: true, commands: [evaluatedCommand] },
+		0,
+		{ repoLocation: undefined } as any,
+	);
+
+	assert.deepEqual(decision, { type: "block" });
+	assert.match(request!.title, /<warning><bold>Allow bash command\?<\/bold><\/warning>/);
+	assert.match(request!.title, /<mdCode><bold>npm install foo<\/bold><\/mdCode>/);
+	assert.deepEqual(request!.options, [
+		"<success>Allow once</success>",
+		"<error>Deny</error>",
+		"<accent>Save allow rule…</accent>",
+	]);
+});
+
 for (const mode of ["tui", "rpc"] as const) {
 	test(`${mode} regex editing uses the same prefilled editor and keeps the command visible`, async () => {
 		const calls: unknown[][] = [];

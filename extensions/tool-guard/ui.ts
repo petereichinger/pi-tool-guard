@@ -14,7 +14,25 @@ import type {
 type DialogChoice<T> = {
 	label: string;
 	value: T;
+	color?: string;
 };
+
+function themed(ctx: any, color: string, text: string, bold = false): string {
+	const theme = ctx.ui?.theme;
+	if (!theme?.fg) return text;
+	const content = bold && theme.bold ? theme.bold(text) : text;
+	return theme.fg(color, content);
+}
+
+function displayChoices<T>(ctx: any, choices: DialogChoice<T>[]): string[] {
+	return choices.map((choice) => choice.color ? themed(ctx, choice.color, choice.label) : choice.label);
+}
+
+function selectedChoice<T>(selected: string | undefined, choices: DialogChoice<T>[], displayed: string[]): T | undefined {
+	const index = displayed.indexOf(selected ?? "");
+	if (index >= 0) return choices[index]?.value;
+	return choices.find((choice) => choice.label === selected)?.value;
+}
 
 export async function editRegexRule(
 	ctx: any,
@@ -32,11 +50,12 @@ async function selectFileMutationDecisionDialog(
 	actionChoices: DialogChoice<FileMutationDecision>[],
 	scopeChoices: BashRuleScope[],
 ): Promise<FileMutationDecision | undefined> {
+	const displayedActions = displayChoices(ctx, actionChoices);
 	const actionLabel = await ctx.ui.select(
-		`Allow write?\n\n${targetReal}`,
-		actionChoices.map((choice) => choice.label),
+		`${themed(ctx, "warning", "Allow write?", true)}\n\n${themed(ctx, "mdCode", targetReal)}`,
+		displayedActions,
 	);
-	const actionChoice = actionChoices.find((choice) => choice.label === actionLabel)?.value;
+	const actionChoice = selectedChoice(actionLabel, actionChoices, displayedActions);
 	if (!actionChoice || actionChoice.type !== "save") return actionChoice;
 
 	const scope = await ctx.ui.select("Save write-directory allow rule scope", scopeChoices);
@@ -59,9 +78,9 @@ export async function confirmFileMutation(
 
 	const notification = notifyGuardPrompt(`Write permission needed:\n${targetReal}`);
 	const actionChoices: DialogChoice<FileMutationDecision>[] = [
-		{ label: "Allow once", value: { type: "allow-once" } },
-		{ label: "Deny", value: { type: "block" } },
-		{ label: "Add rule…", value: { type: "save", scope: "session", mode: "folder" } },
+		{ label: "Allow once", value: { type: "allow-once" }, color: "success" },
+		{ label: "Deny", value: { type: "block" }, color: "error" },
+		{ label: "Add rule…", value: { type: "save", scope: "session", mode: "folder" }, color: "accent" },
 	];
 	const scopeChoices: BashRuleScope[] = ["session", "directory", ...(config.repoLocation ? (["repo"] as const) : []), "global"];
 
@@ -105,9 +124,9 @@ export async function selectBashDecision(
 	shellLabel = "Bash",
 ): Promise<BashDialogDecision | undefined> {
 	const actionChoices: DialogChoice<BashDialogDecision>[] = [
-		{ label: "Allow once", value: { type: "allow-once" } },
-		{ label: "Deny", value: { type: "block" } },
-		{ label: "Save allow rule…", value: { type: "save", scope: "session", mode: "exact" } },
+		{ label: "Allow once", value: { type: "allow-once" }, color: "success" },
+		{ label: "Deny", value: { type: "block" }, color: "error" },
+		{ label: "Save allow rule…", value: { type: "save", scope: "session", mode: "exact" }, color: "accent" },
 	];
 	const scopeChoices: BashRuleScope[] = ["session", "directory", ...(config.repoLocation ? (["repo"] as const) : []), "global"];
 	const promptedCommand = evaluation.commands.find((item) => item.index === targetIndex);
@@ -132,16 +151,22 @@ async function selectBashDecisionDialog(
 ): Promise<BashDialogDecision | undefined> {
 	const shellName = shellLabel.toLowerCase();
 	const commandLines = evaluation.commands.length === 0
-		? [" No executable commands detected"]
+		? [themed(ctx, "muted", " No executable commands detected")]
 		: evaluation.commands.map((item) => {
 			const approved = item.harmless || item.allowedOnce || item.ruleDecision?.type === "allow";
 			const active = item.index === targetIndex;
 			const marker = active ? (approved ? "→ " : "→ 󰹆") : approved ? "  " : "  󰹆";
-			return `${marker} ${formatDisplayedBashCommand(item)}`;
+			const stateColor = approved ? "success" : active ? "warning" : "muted";
+			return `${themed(ctx, stateColor, marker)} ${themed(ctx, "mdCode", formatDisplayedBashCommand(item), active)}`;
 		});
-	const parserLines = analysis.parserAvailable || !analysis.error ? [] : [`Parser error: ${analysis.error}`];
+	const parserLines = analysis.parserAvailable || !analysis.error
+		? []
+		: [themed(ctx, "error", `Parser error: ${analysis.error}`)];
+	const heading = initialStage === "save"
+		? `Save allow rule for ${shellName} command`
+		: `Allow ${shellName} command?`;
 	const title = [
-		initialStage === "save" ? `Save allow rule for ${shellName} command` : `Allow ${shellName} command?`,
+		themed(ctx, initialStage === "save" ? "accent" : "warning", heading, true),
 		"",
 		...commandLines,
 		...parserLines,
@@ -151,8 +176,9 @@ async function selectBashDecisionDialog(
 	if (initialStage === "save") {
 		action = { type: "save", scope: "session", mode: "exact" };
 	} else {
-		const actionLabel = await ctx.ui.select(title, actionChoices.map((choice) => choice.label));
-		action = actionChoices.find((choice) => choice.label === actionLabel)?.value;
+		const displayedActions = displayChoices(ctx, actionChoices);
+		const actionLabel = await ctx.ui.select(title, displayedActions);
+		action = selectedChoice(actionLabel, actionChoices, displayedActions);
 	}
 
 	if (!action || action.type === "block") return { type: "block" };

@@ -10,6 +10,7 @@ A small [pi](https://pi.dev) extension that adds a tool guard. **pi 0.84.4 or ne
 - Potentially harmful Bash sub-commands require confirmation, with the dialog showing which parts are harmless, already allowed, or still need approval.
 - Agent `powershell` tool calls are also guarded. Until a PowerShell parser is bundled, each complete non-empty PowerShell script is conservatively treated as potentially harmful and requires approval unless a command rule allows it.
 - User-entered `!` / `!!` bash commands are not intercepted by this extension.
+- `/yolo` temporarily toggles all tool-guard checks off. While enabled, a `YOLO` warning is shown in the footer.
 - Agent Bash and PowerShell tool calls can be allowed or denied with regex rules at four levels: global config, repo config, directory config, and current session.
 - Write confirmations can allow the current operation once or add a scoped write-directory rule for the target file's folder or a custom path.
 - Guard prompts send a best-effort desktop notification when the pi terminal is not focused. It includes at most the first two command lines and is dismissed when a decision is made (where supported by the desktop notification service). On Linux, clicking it focuses the relevant terminal window; kitty, Ghostty, WezTerm, and tmux sessions also attempt to select the exact tab or pane.
@@ -44,6 +45,14 @@ pi -e /path/to/pi-tool-guard
 This extension depends on `tree-sitter` and `tree-sitter-bash`. In plain Node.js, normal package resolution is usually enough. In pi's compiled runtime, bare package resolution for extension dependencies can fail even when the packages are installed. The extension therefore falls back to direct `node_modules` entry paths for those parser packages.
 
 ## Commands
+
+### YOLO mode
+
+```text
+/yolo
+```
+
+`/yolo` toggles YOLO mode for the current extension runtime. While it is enabled, Tool Guard allows all shell calls and file mutations without checking allow or deny rules and without asking for confirmation. The footer shows `YOLO` while the mode is active. Run `/yolo` again to disable it. YOLO mode is not persisted and resets when the session runtime starts or reloads.
 
 ### Allow and deny rules
 
@@ -156,4 +165,5 @@ When a potentially harmful agent Bash or PowerShell tool call is requested, inte
 - Shell risk analysis is conservative, not a sandbox or proof of safety. Unknown Bash commands and all non-empty PowerShell scripts are considered potentially harmful, while allow rules can bypass analysis.
 - Regex allow rules are powerful. For example, `/guard-allow-exact ssh oakl.ing` allows that SSH transport for the current pi session, while another host is still prompted. Statically reconstructable remote sub-commands are evaluated against their own rules, so the host rule alone does not allow a remote `rm` or other potentially mutating command. A broader `/guard-allow ^ssh\b` rule trusts every parsed SSH transport.
 - Directory/repo/global persistent rules are normal JSON files. Review them before sharing a project, especially directory rules under `.pi/` and repo rules under the shared Git metadata directory. Session rules live in the pi session file.
-- Deny rules are hard blocks and override matching allow rules at any scope.
+- Deny rules are hard blocks and override matching allow rules at any scope unless YOLO mode is active.
+- YOLO mode bypasses every Tool Guard check, including deny rules and outside-CWD write checks. It is intentionally unsafe and only indicated by the footer warning.

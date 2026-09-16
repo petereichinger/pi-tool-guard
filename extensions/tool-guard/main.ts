@@ -10,9 +10,12 @@ import { persistedSessionRules, loadSessionRules } from "./session-rules.ts";
 import { setupTerminalFocusTracking } from "./terminal-focus.ts";
 import { confirmFileMutation } from "./ui.ts";
 import type { BashRule, BashRuleScope, PersistentBashRuleScope } from "./types.ts";
+import { registerYoloMode } from "./yolo-mode.ts";
 
 const POLICY_PROMPT =
 	"\n\nPermission policy active: read/list/search tools are allowed; write/edit targets inside the current working directory are allowed; write/edit targets outside the current working directory require user confirmation unless they are under a scoped write-directory allow rule; agent bash and PowerShell tool calls are guarded. Bash calls are parsed with tree-sitter-bash and classified command-by-command; PowerShell calls conservatively require approval as a complete script. Command allow/deny rules apply to each parsed Bash sub-command or complete PowerShell script. Fully harmless Bash lines are allowed automatically unless a deny rule matches. Potentially harmful commands require approval unless they match a session, directory, repo, or global allow regex. Matching deny regexes override allows and block the shell tool call.";
+const YOLO_PROMPT =
+	"\n\nYOLO mode is active: tool-guard allows all shell and file mutation tool calls without confirmation.";
 
 export function registerHerdrPromptBridge(pi: ExtensionAPI) {
 	// Herdr's pi integration owns agent-state reporting and listens on pi's
@@ -35,6 +38,7 @@ export default function toolGuard(pi: ExtensionAPI) {
 	const writeAllowDirectories: string[] = [];
 	let sessionRuleErrors: string[] = [];
 	const runPermissionRequest = createPermissionRequestRunner();
+	const yoloMode = registerYoloMode(pi);
 	const reloadConfigs = async (ctx: any) => {
 		invalidateConfigCache();
 		return loadConfigs(ctx);
@@ -85,10 +89,12 @@ export default function toolGuard(pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", async (event) => ({
-		systemPrompt: event.systemPrompt + POLICY_PROMPT,
+		systemPrompt: event.systemPrompt + POLICY_PROMPT + (yoloMode.isEnabled() ? YOLO_PROMPT : ""),
 	}));
 
 	pi.on("tool_call", async (event, ctx) => {
+		if (yoloMode.isEnabled()) return undefined;
+
 		if (event.toolName === "bash" || event.toolName === "powershell") {
 			const command = String((event.input as any).command ?? "");
 			const config = await reloadConfigs(ctx);

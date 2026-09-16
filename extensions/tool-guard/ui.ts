@@ -132,11 +132,11 @@ async function selectBashDecisionDialog(
 ): Promise<BashDialogDecision | undefined> {
 	const shellName = shellLabel.toLowerCase();
 	const commandLines = evaluation.commands.length === 0
-		? ["✅ No executable commands detected"]
+		? [" No executable commands detected"]
 		: evaluation.commands.map((item) => {
 			const approved = item.harmless || item.allowedOnce || item.ruleDecision?.type === "allow";
 			const active = item.index === targetIndex;
-			const marker = active ? (approved ? "→ ✅" : "→ ⚠️") : approved ? "  ✅" : "  ⚠️";
+			const marker = active ? (approved ? "→ " : "→ 󰹆") : approved ? "  " : "  󰹆";
 			return `${marker} ${formatDisplayedBashCommand(item)}`;
 		});
 	const parserLines = analysis.parserAvailable || !analysis.error ? [] : [`Parser error: ${analysis.error}`];

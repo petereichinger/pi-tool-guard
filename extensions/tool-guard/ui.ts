@@ -1,5 +1,6 @@
 import { dirname, resolve } from "node:path";
 import { notifyGuardPrompt } from "./desktop-notify.ts";
+import { GuardSelectionDialog } from "./selection-dialog.ts";
 import { canonicalizeForPolicy, isInside, stripAtPrefix } from "./path-policy.ts";
 import { formatDisplayedBashCommand } from "./rule-utils.ts";
 import type {
@@ -14,7 +15,6 @@ import type {
 type DialogChoice<T> = {
 	label: string;
 	value: T;
-	color?: string;
 };
 
 function themed(ctx: any, color: string, text: string, bold = false): string {
@@ -24,13 +24,19 @@ function themed(ctx: any, color: string, text: string, bold = false): string {
 	return theme.fg(color, content);
 }
 
-function displayChoices<T>(ctx: any, choices: DialogChoice<T>[]): string[] {
-	return choices.map((choice) => choice.color ? themed(ctx, choice.color, choice.label) : choice.label);
-}
-
-function selectedChoice<T>(selected: string | undefined, choices: DialogChoice<T>[], displayed: string[]): T | undefined {
-	const index = displayed.indexOf(selected ?? "");
-	if (index >= 0) return choices[index]?.value;
+async function selectAction<T>(ctx: any, getTitle: () => string, choices: DialogChoice<T>[]): Promise<T | undefined> {
+	const labels = choices.map((choice) => choice.label);
+	let selected: string | undefined;
+	if (ctx.mode === "tui" && ctx.ui.theme && ctx.ui.custom) {
+		selected = await ctx.ui.custom((tui: any, theme: any, _keybindings: any, done: (value: string | undefined) => void) =>
+			new GuardSelectionDialog(getTitle, labels, theme, done, () => done(undefined), () => tui.requestRender()),
+		);
+	} else {
+		const displayed = labels.map((label) => themed(ctx, "accent", label));
+		const displayedSelection = await ctx.ui.select(getTitle(), displayed);
+		const selectedIndex = displayed.indexOf(displayedSelection ?? "");
+		selected = selectedIndex >= 0 ? labels[selectedIndex] : displayedSelection;
+	}
 	return choices.find((choice) => choice.label === selected)?.value;
 }
 
@@ -50,12 +56,11 @@ async function selectFileMutationDecisionDialog(
 	actionChoices: DialogChoice<FileMutationDecision>[],
 	scopeChoices: BashRuleScope[],
 ): Promise<FileMutationDecision | undefined> {
-	const displayedActions = displayChoices(ctx, actionChoices);
-	const actionLabel = await ctx.ui.select(
-		`${themed(ctx, "warning", "Allow write?", true)}\n\n${themed(ctx, "mdCode", targetReal)}`,
-		displayedActions,
+	const actionChoice = await selectAction(
+		ctx,
+		() => `${themed(ctx, "warning", "Allow write?", true)}\n\n${themed(ctx, "mdCode", targetReal)}`,
+		actionChoices,
 	);
-	const actionChoice = selectedChoice(actionLabel, actionChoices, displayedActions);
 	if (!actionChoice || actionChoice.type !== "save") return actionChoice;
 
 	const scope = await ctx.ui.select("Save write-directory allow rule scope", scopeChoices);
@@ -78,9 +83,9 @@ export async function confirmFileMutation(
 
 	const notification = notifyGuardPrompt(`Write permission needed:\n${targetReal}`);
 	const actionChoices: DialogChoice<FileMutationDecision>[] = [
-		{ label: "Allow once", value: { type: "allow-once" }, color: "success" },
-		{ label: "Deny", value: { type: "block" }, color: "error" },
-		{ label: "Add rule…", value: { type: "save", scope: "session", mode: "folder" }, color: "accent" },
+		{ label: "Allow once", value: { type: "allow-once" } },
+		{ label: "Deny", value: { type: "block" } },
+		{ label: "Add rule…", value: { type: "save", scope: "session", mode: "folder" } },
 	];
 	const scopeChoices: BashRuleScope[] = ["session", "directory", ...(config.repoLocation ? (["repo"] as const) : []), "global"];
 
@@ -124,9 +129,9 @@ export async function selectBashDecision(
 	shellLabel = "Bash",
 ): Promise<BashDialogDecision | undefined> {
 	const actionChoices: DialogChoice<BashDialogDecision>[] = [
-		{ label: "Allow once", value: { type: "allow-once" }, color: "success" },
-		{ label: "Deny", value: { type: "block" }, color: "error" },
-		{ label: "Save allow rule…", value: { type: "save", scope: "session", mode: "exact" }, color: "accent" },
+		{ label: "Allow once", value: { type: "allow-once" } },
+		{ label: "Deny", value: { type: "block" } },
+		{ label: "Save allow rule…", value: { type: "save", scope: "session", mode: "exact" } },
 	];
 	const scopeChoices: BashRuleScope[] = ["session", "directory", ...(config.repoLocation ? (["repo"] as const) : []), "global"];
 	const promptedCommand = evaluation.commands.find((item) => item.index === targetIndex);
@@ -150,35 +155,35 @@ async function selectBashDecisionDialog(
 	shellLabel: string,
 ): Promise<BashDialogDecision | undefined> {
 	const shellName = shellLabel.toLowerCase();
-	const commandLines = evaluation.commands.length === 0
-		? [themed(ctx, "muted", " No executable commands detected")]
-		: evaluation.commands.map((item) => {
-			const approved = item.harmless || item.allowedOnce || item.ruleDecision?.type === "allow";
-			const active = item.index === targetIndex;
-			const marker = active ? (approved ? "→ " : "→ 󰹆") : approved ? "  " : "  󰹆";
-			const stateColor = approved ? "success" : active ? "warning" : "muted";
-			return `${themed(ctx, stateColor, marker)} ${themed(ctx, "mdCode", formatDisplayedBashCommand(item), active)}`;
-		});
-	const parserLines = analysis.parserAvailable || !analysis.error
-		? []
-		: [themed(ctx, "error", `Parser error: ${analysis.error}`)];
-	const heading = initialStage === "save"
-		? `Save allow rule for ${shellName} command`
-		: `Allow ${shellName} command?`;
-	const title = [
-		themed(ctx, initialStage === "save" ? "accent" : "warning", heading, true),
-		"",
-		...commandLines,
-		...parserLines,
-	].join("\n");
+	const getTitle = () => {
+		const commandLines = evaluation.commands.length === 0
+			? [themed(ctx, "muted", " No executable commands detected")]
+			: evaluation.commands.map((item) => {
+				const approved = item.harmless || item.allowedOnce || item.ruleDecision?.type === "allow";
+				const active = item.index === targetIndex;
+				const marker = active ? (approved ? "→ " : "→ 󰹆") : approved ? "  " : "  󰹆";
+				const stateColor = approved ? "success" : active ? "warning" : "muted";
+				return `${themed(ctx, stateColor, marker)} ${themed(ctx, "mdCode", formatDisplayedBashCommand(item), active)}`;
+			});
+		const parserLines = analysis.parserAvailable || !analysis.error
+			? []
+			: [themed(ctx, "error", `Parser error: ${analysis.error}`)];
+		const heading = initialStage === "save"
+			? `Save allow rule for ${shellName} command`
+			: `Allow ${shellName} command?`;
+		return [
+			themed(ctx, initialStage === "save" ? "accent" : "warning", heading, true),
+			"",
+			...commandLines,
+			...parserLines,
+		].join("\n");
+	};
 
 	let action: BashDialogDecision | undefined;
 	if (initialStage === "save") {
 		action = { type: "save", scope: "session", mode: "exact" };
 	} else {
-		const displayedActions = displayChoices(ctx, actionChoices);
-		const actionLabel = await ctx.ui.select(title, displayedActions);
-		action = selectedChoice(actionLabel, actionChoices, displayedActions);
+		action = await selectAction(ctx, getTitle, actionChoices);
 	}
 
 	if (!action || action.type === "block") return { type: "block" };

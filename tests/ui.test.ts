@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { GuardSelectionDialog } from "../extensions/tool-guard/selection-dialog.ts";
 import { editRegexRule, selectBashDecision } from "../extensions/tool-guard/ui.ts";
 
-test("permission prompts use semantic theme colors", async () => {
+test("permission prompt entries use one theme color", async () => {
 	let request: { title: string; options: string[] } | undefined;
 	const theme = {
 		fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
@@ -38,10 +39,34 @@ test("permission prompts use semantic theme colors", async () => {
 	assert.match(request!.title, /<warning><bold>Allow bash command\?<\/bold><\/warning>/);
 	assert.match(request!.title, /<mdCode><bold>npm install foo<\/bold><\/mdCode>/);
 	assert.deepEqual(request!.options, [
-		"<success>Allow once</success>",
-		"<error>Deny</error>",
+		"<accent>Allow once</accent>",
+		"<accent>Deny</accent>",
 		"<accent>Save allow rule…</accent>",
 	]);
+});
+
+test("interactive permission prompt renders only the selected entry in bold", () => {
+	const theme = {
+		fg: (_color: string, text: string) => `\x1b[35m${text}\x1b[39m`,
+		bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
+	};
+	const dialog = new GuardSelectionDialog(
+		() => "Title",
+		["Allow once", "Deny", "Save allow rule…"],
+		theme as any,
+		() => {},
+		() => {},
+		() => {},
+	);
+
+	let rendered = dialog.render(120).join("\n");
+	assert.match(rendered, /\x1b\[35m\x1b\[1mAllow once\x1b\[22m\x1b\[39m/);
+	assert.doesNotMatch(rendered, /\x1b\[1mDeny/);
+
+	dialog.handleInput("j");
+	rendered = dialog.render(120).join("\n");
+	assert.match(rendered, /\x1b\[35m\x1b\[1mDeny\x1b\[22m\x1b\[39m/);
+	assert.doesNotMatch(rendered, /\x1b\[1mAllow once/);
 });
 
 for (const mode of ["tui", "rpc"] as const) {

@@ -54,7 +54,11 @@ This extension depends on `tree-sitter` and `tree-sitter-bash`. In plain Node.js
 
 `/yolo` toggles YOLO mode for the current extension runtime. While it is enabled, Tool Guard allows all shell calls and file mutations without checking allow or deny rules and without asking for confirmation. The footer shows `YOLO` while the mode is active. Run `/yolo` again to disable it.
 
-While YOLO mode is active, Tool Guard sets `PI_TOOL_GUARD_YOLO=1` in the pi process. Newly spawned child pi processes inherit it and start with YOLO mode enabled. This includes workers launched by `pi-delegate-workers`, so their proxied permission dialogs are skipped. A child can pass the mode to its own descendants in the same way. Tool Guard removes the variable when YOLO mode is disabled or the current session shuts down. The mode is not stored in session data and resets on reload or session replacement.
+Tool Guard creates a temporary shared state file at session startup, even when YOLO is disabled. Child pi processes inherit its path through `PI_TOOL_GUARD_YOLO_STATE` and read the current state before each tool call. Already-running `pi-delegate-workers` workers and their nested workers therefore follow parent `/yolo` changes in both directions. Queued permission requests also recheck YOLO before approval. An approval dialog that is already open still needs a response.
+
+The parent session controls the shared mode. Run `/yolo` there, not in a child. Delegate workers do not send a separate footer warning, so the parent shows only one `YOLO` indicator.
+
+`PI_TOOL_GUARD_YOLO=1` can still enable YOLO at startup when no shared state path is inherited. Tool Guard sets this variable while enabled and removes it when disabled. An unreadable or missing shared state disables YOLO, even if a child inherited this variable. The parent removes its temporary state file on shutdown. The mode is not stored in session data and resets on reload or session replacement.
 
 ### Allow and deny rules
 

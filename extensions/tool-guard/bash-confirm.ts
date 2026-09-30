@@ -19,10 +19,12 @@ export async function confirmShell(
 	onSessionRulesChanged: () => void = () => {},
 	runPermissionRequest: PermissionRequestRunner = runImmediately,
 	reloadConfig?: () => Promise<LoadedConfigState>,
+	isBypassed: () => boolean = () => false,
 ) {
 	let activeConfig = config;
 	const shellLabel = shell === "powershell" ? "PowerShell" : "Bash";
 	const analysis = shell === "powershell" ? analyzePowerShell(command) : await analyzeBash(command, ctx.cwd);
+	if (isBypassed()) return undefined;
 	const allHarmless = analysis.commands.every((item) => item.harmless);
 	if (allHarmless) {
 		const harmlessEvaluation = evaluateBashAnalysis(analysis, new Set<number>(), bashAllowRules, bashDenyRules, activeConfig);
@@ -37,6 +39,7 @@ export async function confirmShell(
 	}
 
 	return runPermissionRequest(async () => {
+		if (isBypassed()) return undefined;
 		// This request may have waited behind another agent's prompt. Reload
 		// persistent rules before evaluating it so newly saved rules take effect.
 		if (reloadConfig) activeConfig = await reloadConfig();
@@ -44,6 +47,7 @@ export async function confirmShell(
 		const allowedOnceIndexes = new Set<number>();
 		let promptStage: "action" | "save" = "action";
 		while (true) {
+			if (isBypassed()) return undefined;
 			const evaluation = evaluateBashAnalysis(analysis, allowedOnceIndexes, bashAllowRules, bashDenyRules, activeConfig);
 		if (evaluation.denied) {
 			return {

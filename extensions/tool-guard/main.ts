@@ -108,6 +108,7 @@ export default function toolGuard(pi: ExtensionAPI) {
 				saveSessionRules,
 				runPermissionRequest,
 				() => reloadConfigs(ctx),
+				yoloMode.isEnabled,
 			);
 		}
 
@@ -123,11 +124,13 @@ export default function toolGuard(pi: ExtensionAPI) {
 		if (isInside(cwdReal, targetReal)) return undefined;
 
 		return runPermissionRequest(async () => {
+			if (yoloMode.isEnabled()) return undefined;
 			// Recheck after earlier permission requests have completed. Their newly
 			// saved session or persistent rules may already permit this write.
 			if (writeAllowDirectories.some((directory) => isInside(directory, targetReal))) return undefined;
 
 			const config = await reloadConfigs(ctx);
+			if (yoloMode.isEnabled()) return undefined;
 			if (config.writeAllowDirectories.some((rule) => isInside(rule.path, targetReal))) return undefined;
 
 			return confirmFileMutation(

@@ -19,7 +19,13 @@ export type WriteDirectoryRule = {
 	description?: string;
 };
 
+export type GitTarget = {
+	gitDir: string;
+	workTree?: string;
+};
+
 export type PermissionConfig = {
+	git?: { allowTargets?: GitTarget[]; denyTargets?: GitTarget[] };
 	version?: number;
 	bash?: {
 		allow?: StoredBashRule[];
@@ -44,6 +50,8 @@ export type LoadedConfigFile = {
 	allowRules: BashRule[];
 	denyRules: BashRule[];
 	writeAllowDirectories: WriteDirectoryRule[];
+	gitAllowTargets?: GitTarget[];
+	gitDenyTargets?: GitTarget[];
 	errors: string[];
 };
 
@@ -56,6 +64,8 @@ export type LoadedConfigState = {
 	allowRules: BashRule[];
 	denyRules: BashRule[];
 	writeAllowDirectories: WriteDirectoryRule[];
+	gitAllowTargets?: GitTarget[];
+	gitDenyTargets?: GitTarget[];
 	errors: string[];
 };
 
@@ -63,11 +73,15 @@ export type LoadedSessionRuleState = {
 	allowRules: BashRule[];
 	denyRules: BashRule[];
 	writeAllowDirectories: string[];
+	gitAllowTargets?: GitTarget[];
+	gitDenyTargets?: GitTarget[];
 	errors: string[];
 };
 
 export type BashCommandRisk = {
 	command: string;
+	originalCommand?: string;
+	git?: { target?: GitTarget; error?: string };
 	name: string;
 	harmless: boolean;
 	reason: string;

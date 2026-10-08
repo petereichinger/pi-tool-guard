@@ -40,6 +40,33 @@ async function selectAction<T>(ctx: any, getTitle: () => string, choices: Dialog
 	return choices.find((choice) => choice.label === selected)?.value;
 }
 
+export async function selectGitTargetDecision(
+	ctx: any,
+	command: string,
+	target: { gitDir: string; workTree?: string } | undefined,
+	error: string | undefined,
+	config: LoadedConfigState,
+): Promise<{ type: "allow-once" | "block" } | { type: "save"; scope: BashRuleScope } | undefined> {
+	const title = `Allow Git target?\n\nCommand: ${command}\n\n${target
+		? `Git directory: ${target.gitDir}\nWorktree: ${target.workTree ?? "(bare repository)"}`
+		: `Unknown target: ${error ?? "cannot resolve Git target"}`}\n\nThis approves the target only, not the command.`;
+	const notification = notifyGuardPrompt(title);
+	try {
+		const action = await selectAction(ctx, () => title, [
+			{ label: "Allow once", value: "once" },
+			{ label: "Deny", value: "deny" },
+			...(target ? [{ label: "Save Git target allow…", value: "save" }] : []),
+		]);
+		if (action === "once") return { type: "allow-once" };
+		if (action !== "save") return { type: "block" };
+		const scopes: BashRuleScope[] = ["session", "directory", ...(config.repoLocation ? ["repo" as const] : []), "global"];
+		const scope = await ctx.ui.select(`Save Git target allow scope\n\nCommand: ${command}`, scopes);
+		return scopes.includes(scope) ? { type: "save", scope } : undefined;
+	} finally {
+		notification.dismiss();
+	}
+}
+
 export async function editRegexRule(
 	ctx: any,
 	title: string,

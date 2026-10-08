@@ -1,10 +1,12 @@
 import { createScopedJsonStore, resolveScopedConfigLocations } from "pi-scoped-config";
-import { dirname, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { canonicalizeForPolicy, stripAtPrefix } from "./path-policy.ts";
 import type {
 	BashRule,
 	BashRuleList,
 	BashRuleScope,
+	GitTarget,
 	LoadedConfigFile,
 	LoadedConfigState,
 	PermissionConfig,
@@ -16,7 +18,49 @@ import type {
 } from "./types.ts";
 
 function defaultConfig(): PermissionConfig {
-	return { version: 1, bash: { allow: [], deny: [] }, write: { allowDirectories: [] } };
+	return { version: 1, bash: { allow: [], deny: [] }, write: { allowDirectories: [] }, git: { allowTargets: [], denyTargets: [] } };
+}
+
+export function canonicalizeGitTarget(value: unknown): GitTarget {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("expected a Git target object");
+	const target = value as GitTarget;
+	const canonicalize = (path: unknown): string => {
+		if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0")) {
+			throw new Error("Git target paths must be absolute strings without NUL characters");
+		}
+		let current = resolve(path);
+		const missing: string[] = [];
+		while (true) {
+			try {
+				return resolve(realpathSync(current), ...missing);
+			} catch (error: any) {
+				if (error.code !== "ENOENT") throw error;
+				const parent = dirname(current);
+				if (parent === current) throw error;
+				missing.unshift(basename(current));
+				current = parent;
+			}
+		}
+	};
+	return {
+		gitDir: canonicalize(target.gitDir),
+		...(target.workTree === undefined ? {} : { workTree: canonicalize(target.workTree) }),
+	};
+}
+
+export function compileStoredGitTargets(entries: unknown, label: string, list: BashRuleList = "allow"): { targets: GitTarget[]; errors: string[] } {
+	const targets: GitTarget[] = [];
+	const errors: string[] = [];
+	if (entries === undefined) return { targets, errors };
+	if (!Array.isArray(entries)) return { targets, errors: [`${label}: Git ${list}Targets must be an array`] };
+	for (const [index, entry] of entries.entries()) {
+		try {
+			targets.push(canonicalizeGitTarget(entry));
+		} catch (error: any) {
+			errors.push(`${label}: ignored Git target #${index + 1}: ${error.message}`);
+		}
+	}
+	return { targets, errors };
 }
 
 function normalizeConfig(value: unknown): PermissionConfig {
@@ -125,6 +169,8 @@ async function compileConfigFile(
 	const allow = compileStoredRules(config.bash?.allow, scope, "allow", path);
 	const deny = compileStoredRules(config.bash?.deny, scope, "deny", path);
 	const writeAllowDirectories = await compileStoredWriteDirectories(config.write?.allowDirectories, scope, path);
+	const git = compileStoredGitTargets(config.git?.allowTargets, `${path}: ${scope}`);
+	const gitDeny = compileStoredGitTargets(config.git?.denyTargets, `${path}: ${scope}`, "deny");
 	return {
 		path,
 		scope,
@@ -132,12 +178,16 @@ async function compileConfigFile(
 		allowRules: allow.rules,
 		denyRules: deny.rules,
 		writeAllowDirectories: writeAllowDirectories.rules,
+		gitAllowTargets: git.targets,
+		gitDenyTargets: gitDeny.targets,
 		errors: [
 			...file.warnings,
 			...file.errors,
 			...allow.errors,
 			...deny.errors,
 			...writeAllowDirectories.errors,
+			...git.errors,
+			...gitDeny.errors,
 		],
 	};
 }
@@ -184,6 +234,16 @@ export async function loadConfigs(ctx: any): Promise<LoadedConfigState> {
 			...directoryConfig.writeAllowDirectories,
 			...(repoConfig?.writeAllowDirectories ?? []),
 			...globalConfig.writeAllowDirectories,
+		],
+		gitAllowTargets: [
+			...(directoryConfig.gitAllowTargets ?? []),
+			...(repoConfig?.gitAllowTargets ?? []),
+			...(globalConfig.gitAllowTargets ?? []),
+		],
+		gitDenyTargets: [
+			...(directoryConfig.gitDenyTargets ?? []),
+			...(repoConfig?.gitDenyTargets ?? []),
+			...(globalConfig.gitDenyTargets ?? []),
 		],
 		errors: [
 			...new Set([
@@ -241,6 +301,39 @@ export async function addPersistentWriteDirectory(ctx: any, scope: PersistentBas
 	file.config.write ??= { allowDirectories: [] };
 	file.config.write.allowDirectories ??= [];
 	file.config.write.allowDirectories.push({ path: directory });
+	await saveConfigFile(file.path, file.config);
+}
+
+export async function addPersistentGitTarget(ctx: any, scope: PersistentBashRuleScope, target: GitTarget, list: BashRuleList = "allow") {
+	const canonical = canonicalizeGitTarget(target);
+	const file = await loadWritableConfig(ctx, scope);
+	file.config.git = file.config.git && typeof file.config.git === "object" && !Array.isArray(file.config.git) ? file.config.git : {};
+	const key = list === "allow" ? "allowTargets" : "denyTargets";
+	file.config.git[key] ??= [];
+	const compiled = compileStoredGitTargets(file.config.git[key], file.path, list);
+	if (compiled.errors.length > 0) throw new Error(compiled.errors.join("\n"));
+	file.config.git[key] = compiled.targets;
+	if (!compiled.targets.some((entry) => entry.gitDir === canonical.gitDir && entry.workTree === canonical.workTree)) {
+		file.config.git[key].push(canonical);
+	}
+	await saveConfigFile(file.path, file.config);
+}
+
+export async function removePersistentGitTargets(ctx: any, scope: PersistentBashRuleScope, target: string, list: BashRuleList = "allow") {
+	const file = await loadWritableConfig(ctx, scope);
+	file.config.git = file.config.git && typeof file.config.git === "object" && !Array.isArray(file.config.git) ? file.config.git : {};
+	const key = list === "allow" ? "allowTargets" : "denyTargets";
+	const entries = file.config.git[key];
+	if (target === "all") {
+		file.config.git[key] = [];
+	} else {
+		const index = Number(target) - 1;
+		const compiled = compileStoredGitTargets(entries, file.path, list);
+		if (compiled.errors.length > 0) throw new Error(`${compiled.errors.join("\n")}\nClear all Git targets to remove invalid entries.`);
+		if (!Number.isInteger(index) || index < 0 || index >= compiled.targets.length) throw new Error(`No ${scope} Git target #${target}`);
+		compiled.targets.splice(index, 1);
+		file.config.git[key] = compiled.targets;
+	}
 	await saveConfigFile(file.path, file.config);
 }
 

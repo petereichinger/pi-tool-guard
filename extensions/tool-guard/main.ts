@@ -3,17 +3,17 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { confirmShell } from "./bash-confirm.ts";
 import { registerGuardCommands } from "./commands.ts";
 import { WRITING_TOOLS, SESSION_RULES_ENTRY_TYPE } from "./constants.ts";
-import { addPersistentWriteDirectory, invalidateConfigCache, loadConfigs } from "./config-store.ts";
+import { addPersistentGitTarget, canonicalizeGitTarget, addPersistentWriteDirectory, invalidateConfigCache, loadConfigs } from "./config-store.ts";
 import { canonicalizeForPolicy, isInside, realpathOrResolve, stripAtPrefix } from "./path-policy.ts";
 import { createPermissionRequestRunner } from "./permission-queue.ts";
 import { persistedSessionRules, loadSessionRules } from "./session-rules.ts";
 import { setupTerminalFocusTracking } from "./terminal-focus.ts";
 import { confirmFileMutation } from "./ui.ts";
-import type { BashRule, BashRuleScope, PersistentBashRuleScope } from "./types.ts";
+import type { BashRule, BashRuleScope, GitTarget, PersistentBashRuleScope } from "./types.ts";
 import { registerYoloMode } from "./yolo-mode.ts";
 
 const POLICY_PROMPT =
-	"\n\nPermission policy active: read/list/search tools are allowed; write/edit targets inside the current working directory are allowed; write/edit targets outside the current working directory require user confirmation unless they are under a scoped write-directory allow rule; agent bash and PowerShell tool calls are guarded. Bash calls are parsed with tree-sitter-bash and classified command-by-command; PowerShell calls conservatively require approval as a complete script. Command allow/deny rules apply to each parsed Bash sub-command or complete PowerShell script. Fully harmless Bash lines are allowed automatically unless a deny rule matches. Potentially harmful commands require approval unless they match a session, directory, repo, or global allow regex. Matching deny regexes override allows and block the shell tool call.";
+	"\n\nPermission policy active: read/list/search tools are allowed; write/edit targets inside the current working directory are allowed; write/edit targets outside the current working directory require user confirmation unless they are under a scoped write-directory allow rule; agent bash and PowerShell tool calls are guarded. Bash calls are parsed with tree-sitter-bash and classified command-by-command; PowerShell calls conservatively require approval as a complete script. Command allow/deny rules apply to each parsed Bash sub-command or complete PowerShell script. The current working directory repository target is automatically allowed unless explicitly denied by a Git target rule. Other Git commands first require approval of their canonical Git metadata directory and worktree, including harmless Git commands. Explicit Git target denies override target approvals. Target approval does not approve an operation: ordinary command rules and prompts then apply to the normalized Git command. Unknown Git targets require one-time approval and cannot be saved or normalized. Deny rules match both raw and normalized commands and override all approvals. Other fully harmless Bash lines are allowed automatically unless a deny rule matches. Potentially harmful commands require approval unless they match a session, directory, repo, or global allow regex. Matching deny regexes override allows and block the shell tool call.";
 const YOLO_PROMPT =
 	"\n\nYOLO mode is active: tool-guard allows all shell and file mutation tool calls without confirmation.";
 
@@ -36,6 +36,8 @@ export default function toolGuard(pi: ExtensionAPI) {
 	const bashAllowRules: BashRule[] = [];
 	const bashDenyRules: BashRule[] = [];
 	const writeAllowDirectories: string[] = [];
+	const gitAllowTargets: GitTarget[] = [];
+	const gitDenyTargets: GitTarget[] = [];
 	let sessionRuleErrors: string[] = [];
 	const runPermissionRequest = createPermissionRequestRunner();
 	const yoloMode = registerYoloMode(pi);
@@ -45,10 +47,12 @@ export default function toolGuard(pi: ExtensionAPI) {
 	};
 	const saveSessionRules = () => {
 		sessionRuleErrors = [];
-		pi.appendEntry(SESSION_RULES_ENTRY_TYPE, persistedSessionRules(bashAllowRules, bashDenyRules, writeAllowDirectories));
+		pi.appendEntry(SESSION_RULES_ENTRY_TYPE, persistedSessionRules(bashAllowRules, bashDenyRules, writeAllowDirectories, gitAllowTargets, gitDenyTargets));
 	};
 
-	const replaceSessionRules = (allowRules: BashRule[], denyRules: BashRule[], allowDirectories: string[]) => {
+	const replaceSessionRules = (allowRules: BashRule[], denyRules: BashRule[], allowDirectories: string[], targets: GitTarget[], denyTargets: GitTarget[]) => {
+		gitAllowTargets.splice(0, gitAllowTargets.length, ...targets);
+		gitDenyTargets.splice(0, gitDenyTargets.length, ...denyTargets);
 		bashAllowRules.splice(0, bashAllowRules.length, ...allowRules);
 		bashDenyRules.splice(0, bashDenyRules.length, ...denyRules);
 		writeAllowDirectories.splice(0, writeAllowDirectories.length, ...allowDirectories);
@@ -67,6 +71,8 @@ export default function toolGuard(pi: ExtensionAPI) {
 		bashAllowRules,
 		bashDenyRules,
 		writeAllowDirectories,
+		gitAllowTargets,
+		gitDenyTargets,
 		saveSessionRules,
 		getSessionRuleErrors: () => sessionRuleErrors,
 	});
@@ -79,7 +85,7 @@ export default function toolGuard(pi: ExtensionAPI) {
 		const writeAllowDirectoryRules = await Promise.all(
 			session.writeAllowDirectories.map((path) => canonicalizeForPolicy(resolve(ctx.cwd, stripAtPrefix(path)))),
 		);
-		replaceSessionRules(session.allowRules, session.denyRules, writeAllowDirectoryRules);
+		replaceSessionRules(session.allowRules, session.denyRules, writeAllowDirectoryRules, session.gitAllowTargets ?? [], session.gitDenyTargets ?? []);
 		sessionRuleErrors = session.errors;
 		const config = await loadConfigs(ctx);
 		const warnings = [...sessionRuleErrors, ...config.errors];
@@ -109,6 +115,21 @@ export default function toolGuard(pi: ExtensionAPI) {
 				runPermissionRequest,
 				() => reloadConfigs(ctx),
 				yoloMode.isEnabled,
+				{
+					sessionTargets: gitAllowTargets,
+					sessionDenyTargets: gitDenyTargets,
+					saveTarget: async (scope: BashRuleScope, target: GitTarget) => {
+						const canonical = canonicalizeGitTarget(target);
+						if (scope === "session") {
+							if (!gitAllowTargets.some((entry) => entry.gitDir === canonical.gitDir && entry.workTree === canonical.workTree)) {
+								gitAllowTargets.push(canonical);
+							}
+							saveSessionRules();
+						} else {
+							await addPersistentGitTarget(ctx, scope, canonical);
+						}
+					},
+				},
 			);
 		}
 

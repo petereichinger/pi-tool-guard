@@ -1,5 +1,6 @@
 import { LEGACY_SESSION_RULES_ENTRY_TYPE, SESSION_RULES_ENTRY_TYPE } from "./constants.ts";
-import type { BashRule, LoadedSessionRuleState, PermissionConfig, StoredWriteDirectoryRule } from "./types.ts";
+import { canonicalizeGitTarget, compileStoredGitTargets } from "./config-store.ts";
+import type { BashRule, GitTarget, LoadedSessionRuleState, PermissionConfig, StoredWriteDirectoryRule } from "./types.ts";
 
 function normalizeConfig(value: unknown): PermissionConfig {
 	const config = value && typeof value === "object" && !Array.isArray(value) ? (value as PermissionConfig) : { version: 1, bash: {} };
@@ -68,23 +69,28 @@ export function loadSessionRules(ctx: any): LoadedSessionRuleState {
 			(entry.customType === SESSION_RULES_ENTRY_TYPE || entry.customType === LEGACY_SESSION_RULES_ENTRY_TYPE)
 		) latest = entry.data;
 	}
-	if (latest === undefined) return { allowRules: [], denyRules: [], writeAllowDirectories: [], errors: [] };
+	if (latest === undefined) return { allowRules: [], denyRules: [], writeAllowDirectories: [], gitAllowTargets: [], gitDenyTargets: [], errors: [] };
 
 	const config = normalizeConfig(latest);
 	const allow = compileSessionRules(config.bash?.allow ?? [], "allow");
 	const deny = compileSessionRules(config.bash?.deny ?? [], "deny");
 	const writeAllowDirectories = compileWriteDirectories(config.write?.allowDirectories);
+	const git = compileStoredGitTargets(config.git?.allowTargets, "session tool-guard entry");
+	const gitDeny = compileStoredGitTargets(config.git?.denyTargets, "session tool-guard entry", "deny");
 	return {
 		allowRules: allow.rules,
 		denyRules: deny.rules,
 		writeAllowDirectories: writeAllowDirectories.directories,
-		errors: [...allow.errors, ...deny.errors, ...writeAllowDirectories.errors],
+		gitAllowTargets: git.targets,
+		gitDenyTargets: gitDeny.targets,
+		errors: [...allow.errors, ...deny.errors, ...writeAllowDirectories.errors, ...git.errors, ...gitDeny.errors],
 	};
 }
 
-export function persistedSessionRules(allowRules: BashRule[], denyRules: BashRule[], writeAllowDirectories: string[]): PermissionConfig {
+export function persistedSessionRules(allowRules: BashRule[], denyRules: BashRule[], writeAllowDirectories: string[], gitAllowTargets: GitTarget[] = [], gitDenyTargets: GitTarget[] = []): PermissionConfig {
 	return {
 		version: 1,
+		git: { allowTargets: gitAllowTargets.map(canonicalizeGitTarget), denyTargets: gitDenyTargets.map(canonicalizeGitTarget) },
 		bash: {
 			allow: allowRules.map((rule) => ({ source: rule.source })),
 			deny: denyRules.map((rule) => ({ source: rule.source })),

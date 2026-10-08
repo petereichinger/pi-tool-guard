@@ -6,7 +6,7 @@ A small [pi](https://pi.dev) extension that adds a tool guard. **pi 0.84.4 or ne
 - `write` / `edit` outside the current working directory require confirmation unless they are under a scoped write-directory allow rule.
 - Agent bash tool calls are parsed with `tree-sitter-bash` and each individual command is labelled harmless or potentially harmful.
 - Bash allow/deny rules apply to each parsed sub-command, not to the full bash line as one string.
-- Fully harmless agent bash lines are allowed automatically unless a deny rule matches one of their parsed sub-commands.
+- Harmless agent Bash commands are allowed automatically unless a deny rule matches. Git targets outside pi's current repository require approval; explicit Git target denies override all target approvals.
 - Potentially harmful Bash sub-commands require confirmation, with the dialog showing which parts are harmless, already allowed, or still need approval.
 - Agent `powershell` tool calls are also guarded. Until a PowerShell parser is bundled, each complete non-empty PowerShell script is conservatively treated as potentially harmful and requires approval unless a command rule allows it.
 - User-entered `!` / `!!` bash commands are not intercepted by this extension.
@@ -85,6 +85,58 @@ Examples:
 /guard-deny global ^sudo\b
 ```
 
+### Git target approval
+
+Git commands use two independent checks:
+
+1. Approve the canonical Git metadata directory and working-tree pair.
+2. Check the remaining Git command against the normal command rules, then prompt if needed.
+
+The target prompt shows the original command, Git directory, and working tree. `Allow once` approves only that target for this tool call. `Save Git target allow…` saves an exact target pair in session, directory, repo, or global scope. Approving a target does not approve `push`, `commit`, or any other operation. The repository containing pi's working directory is allowed by default without saving a rule. This applies only to its exact metadata directory and working-tree pair, not to other repositories or linked worktrees. Git operations still have their separate command checks. Other targets need approval even for harmless operations. All targets in a compound call are checked before operation approval.
+
+For example, after approving the target of `git -C /projects/app push origin main`, this rule matches the remaining operation:
+
+```text
+/guard-allow ^git\s+push\b
+```
+
+Target resolution handles repeated `-C`, `--git-dir`, `--work-tree`, and inherited or inline `GIT_DIR` / `GIT_WORK_TREE` assignments. Paths are resolved through symlinks. Linked worktrees are approved separately by their own metadata directory and working-tree pair. Bare repositories can use explicit `--git-dir` or `--bare`.
+
+Unknown targets require one-time confirmation and cannot be saved or normalized. Examples include dynamic shell expansions, remote SSH Git commands, unsupported Git environment variables or global options, `-c`, config includes, `core.worktree`, aliases, `init` / `clone`, and shell context changes that cannot be resolved safely. The ordinary command check then uses the original command. Git target approval applies to parsed Bash Git commands, not PowerShell scripts or commands hidden inside wrappers such as `env`.
+
+Explicit Git target deny rules override the current-repository default and saved target approvals. They block the command without offering an override prompt. Use `/guard-deny-git` to deny the current repository for this session, or specify scope and repository path:
+
+```text
+/guard-deny-git
+/guard-deny-git global /projects/app
+/guard-clear session git-deny all
+```
+
+`/guard-list` shows the default target and saved allow/deny targets. Clearing a saved allow does not disable the current-repository default; add a deny instead. Target denies use the same exact path-pair format under `git.denyTargets`.
+
+Command deny rules check both the original and normalized command and override target and operation approvals. Existing allow rules for the original `git -C …` text must be changed to match the normalized operation when its target can be resolved.
+
+`/guard-list` includes saved Git targets. Remove them with:
+
+```text
+/guard-clear session git all
+/guard-clear directory git 1
+```
+
+Persistent targets are stored separately from write permissions:
+
+```json
+{
+  "git": {
+    "allowTargets": [
+      { "gitDir": "/projects/app/.git", "workTree": "/projects/app" }
+    ]
+  }
+}
+```
+
+Paths must be absolute. Omit `workTree` for a bare repository. Repo-scoped rules still belong to pi's current repository, not the repository passed to `-C`.
+
 ### Persistent session, directory, repo, and global rules
 
 Session shell command rules (stored under the compatible `bash` key) and session write-directory allows are saved as custom entries in the current pi session file. Directory-scoped rules are saved in `.pi/tool-guard.json` under the current pi working directory. Repo-scoped rules are saved in the Git common dir as `pi-tool-guard.json`, which means they are shared by all worktrees of the same repository. In the main worktree that is usually `.git/pi-tool-guard.json`. Global rules are saved in `~/.pi/agent/extensions/tool-guard.json`, or under the directory pointed to by `PI_CODING_AGENT_DIR` when that environment variable is set. Repository and directory configs are loaded only when pi considers the project trusted. For compatibility, older `simple-permissions` config/session entries are still read.
@@ -108,7 +160,7 @@ The shell confirmation dialog can also save allow rules for each dangerous Bash 
 
 ```text
 /guard-list [all|session|directory|repo|global]
-/guard-clear [session|directory|repo|global] [all|allow|deny|write|number] [all|number]
+/guard-clear [session|directory|repo|global] [all|allow|deny|write|git|git-deny|number] [all|number]
 ```
 
 For backwards compatibility, `/guard-clear 2` removes session allow rule #2. Write-directory allows are cleared with `/guard-clear session write all`, `/guard-clear session write 1`, `/guard-clear directory write all`, or `/guard-clear global write 1`. Persistent shell command rules are cleared with commands such as `/guard-clear directory allow 2`, `/guard-clear repo allow all`, or `/guard-clear global deny all`.

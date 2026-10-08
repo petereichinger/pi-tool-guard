@@ -3,11 +3,13 @@ import type { BashAnalysis, BashAnalysisEvaluation, BashRule, BashRuleDecision, 
 
 function bashRuleDecisionForCommand(
 	command: string,
+	originalCommand: string | undefined,
 	sessionAllowRules: BashRule[],
 	sessionDenyRules: BashRule[],
 	config: LoadedConfigState,
 ): BashRuleDecision | undefined {
-	const deny = matchingBashRule(command, [...sessionDenyRules, ...config.denyRules]);
+	const denyRules = [...sessionDenyRules, ...config.denyRules];
+	const deny = matchingBashRule(command, denyRules) ?? (originalCommand ? matchingBashRule(originalCommand, denyRules) : undefined);
 	if (deny) return { type: "deny", rule: deny };
 	const allow = matchingBashRule(command, [...sessionAllowRules, ...config.allowRules]);
 	if (allow) return { type: "allow", rule: allow };
@@ -25,7 +27,7 @@ export function evaluateBashAnalysis(
 		...item,
 		index,
 		allowedOnce: allowedOnceIndexes.has(index),
-		ruleDecision: bashRuleDecisionForCommand(item.command, sessionAllowRules, sessionDenyRules, config),
+		ruleDecision: bashRuleDecisionForCommand(item.command, item.originalCommand, sessionAllowRules, sessionDenyRules, config),
 	}));
 	const denied = commands.find((item) => item.ruleDecision?.type === "deny");
 	const pendingDangerous = commands.filter(

@@ -25,10 +25,15 @@ export function canonicalizeGitTarget(value: unknown): GitTarget {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("expected a Git target object");
 	const target = value as GitTarget;
 	const canonicalize = (path: unknown): string => {
-		if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0")) {
-			throw new Error("Git target paths must be absolute strings without NUL characters");
+		if (typeof path !== "string" || path.includes("\0")) {
+			throw new Error("Git target paths must be absolute strings or start with $HOME/");
 		}
-		let current = resolve(path);
+		const expanded = path.replace(/^\$(?:HOME|\{HOME\})(?=\/|$)/, () => {
+			if (!process.env.HOME) throw new Error("$HOME is not set");
+			return process.env.HOME;
+		});
+		if (!isAbsolute(expanded)) throw new Error("Git target paths must be absolute strings or start with $HOME/");
+		let current = resolve(expanded);
 		const missing: string[] = [];
 		while (true) {
 			try {

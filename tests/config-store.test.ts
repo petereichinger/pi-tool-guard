@@ -12,11 +12,29 @@ process.env.PI_CODING_AGENT_DIR = agentDir;
 
 const {
 	addPersistentRule,
+	canonicalizeGitTarget,
 	invalidateConfigCache,
 	loadConfigs,
 } = await import("../extensions/tool-guard/config-store.ts");
 
 test.after(() => rm(root, { recursive: true, force: true }));
+
+test("expands $HOME in stored Git targets", () => {
+	const originalHome = process.env.HOME;
+	process.env.HOME = root;
+	try {
+		assert.deepEqual(canonicalizeGitTarget({
+			gitDir: "$HOME/.local/share/chezmoi/.git",
+			workTree: "${HOME}/.local/share/chezmoi",
+		}), {
+			gitDir: join(root, ".local/share/chezmoi/.git"),
+			workTree: join(root, ".local/share/chezmoi"),
+		});
+	} finally {
+		if (originalHome === undefined) delete process.env.HOME;
+		else process.env.HOME = originalHome;
+	}
+});
 
 test("loads trusted scopes in directory, repo, global order and gates untrusted scopes", async () => {
 	await mkdir(join(agentDir, "extensions"), { recursive: true });

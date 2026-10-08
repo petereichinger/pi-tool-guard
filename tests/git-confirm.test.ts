@@ -82,6 +82,20 @@ test("the current repository is allowed by default without storing an approval",
 	assert.deepEqual(f.prompts, []);
 });
 
+test("safe global includes preserve current repository approval and explicit denies", async (t) => {
+	const f = await fixture(t);
+	await mkdir(join(f.root, ".config", "delta"), { recursive: true });
+	await writeFile(join(f.root, ".config", "delta", "delta.gitconfig"), "[delta]\n\tside-by-side = true\n");
+	await writeFile(join(f.root, ".gitconfig"), "[include]\n\tpath = ~/.config/delta/delta.gitconfig\n");
+	f.ctx.cwd = f.target.workTree!;
+	f.ctx.hasUI = false;
+	assert.equal(await f.run("git status --short --branch"), undefined);
+	f.sessionDenyTargets.push(f.target);
+	assert.match((await f.run("git status --short --branch"))?.reason ?? "", /Git target denied/);
+	assert.deepEqual(f.prompts, []);
+	assert.deepEqual(f.sessionTargets, []);
+});
+
 test("current repository approval does not approve Git operations or other repositories", async (t) => {
 	const f = await fixture(t);
 	const other = await f.repository("other");

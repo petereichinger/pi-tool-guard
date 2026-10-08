@@ -228,10 +228,10 @@ test("rejects missing or invalid metadata without normalizing", async (t) => {
 	assert.ok((await analyze("git --git-dir=. status", repo)).error);
 });
 
-test("rejects target-changing config and included config", async (t) => {
+test("rejects target-changing config and conditional includes", async (t) => {
 	const { repo, gitDir } = await fixture(t);
 	for (const config of [
-		"[core]\nworktree = /elsewhere\n", "[include]\npath = /elsewhere\n",
+		"[core]\nworktree = /elsewhere\n",
 		'[includeIf "gitdir:*"]\npath = /elsewhere\n', "[core]\nbare = maybe\n",
 	]) {
 		await writeFile(join(gitDir, "config"), config);
@@ -257,12 +257,126 @@ test("rejects target-changing global config selected by the inherited or inline 
 	await rm(join(root, ".gitconfig"));
 	const otherHome = join(root, "other-home");
 	await mkdir(otherHome);
-	await writeFile(join(otherHome, ".gitconfig"), "[include]\npath = /elsewhere\n");
+	await writeFile(join(otherHome, ".gitconfig"), "[include]\npath = unsafe.gitconfig\n");
+	await writeFile(join(otherHome, "unsafe.gitconfig"), "[core]\nworktree = /elsewhere\n");
 	const command = `HOME='${otherHome}' git -C . status`;
 	const inline = await analyze(command, repo);
 	assert.equal(inline.command, command);
 	assert.equal(inline.target, undefined);
-	assert.match(inline.error!, /includes/);
+	assert.match(inline.error!, /core.worktree/);
+});
+
+test("resolves a safe global include using a home-relative path", async (t) => {
+	const { root, repo, gitDir } = await fixture(t);
+	await writeFile(join(root, ".gitconfig"), "[include]\npath = ~/delta.gitconfig\n");
+	await writeFile(join(root, "delta.gitconfig"), "[core]\npager = delta\n[delta]\nside-by-side = true\n");
+	assert.deepEqual(await analyze("git -C . status", repo), {
+		command: "git status", target: { gitDir, workTree: repo },
+	});
+});
+
+test("resolves nested relative includes against each containing config in order", async (t) => {
+	const { repo, gitDir } = await fixture(t);
+	await mkdir(join(gitDir, "includes", "nested"), { recursive: true });
+	await writeFile(join(gitDir, "config"), "[include]\npath = includes/first.config\npath = includes/last.config\n");
+	await writeFile(join(gitDir, "includes", "first.config"), "[core]\nbare = false\n[include]\npath = nested/bare.config\n");
+	await writeFile(join(gitDir, "includes", "nested", "bare.config"), "[core]\nbare = true\n");
+	await writeFile(join(gitDir, "includes", "last.config"), "[core]\nbare = false\n");
+	assert.deepEqual(await analyze("git status", repo), {
+		command: "git status", target: { gitDir, workTree: repo },
+	});
+	await writeFile(join(gitDir, "includes", "last.config"), "[core]\nbare = true\n");
+	assert.deepEqual(await analyze("git status", repo), {
+		command: "git status", target: { gitDir },
+	});
+	await writeFile(join(gitDir, "config"), "[include]\npath = includes/first.config\n[core]\nbare = false\n");
+	assert.deepEqual(await analyze("git status", repo), {
+		command: "git status", target: { gitDir, workTree: repo },
+	});
+});
+
+test("resolves quoted absolute include paths with spaces", async (t) => {
+	const { root, repo, gitDir } = await fixture(t);
+	const included = join(root, "safe config.gitconfig");
+	await writeFile(included, "[delta]\nside-by-side = true\n");
+	await writeFile(join(gitDir, "config"), `[include]\npath = ${JSON.stringify(included)}\n`);
+	assert.deepEqual(await analyze("git status", repo), {
+		command: "git status", target: { gitDir, workTree: repo },
+	});
+});
+
+test("decodes supported Git string escapes in quoted include paths", { skip: process.platform === "win32" }, async (t) => {
+	const { repo, gitDir } = await fixture(t);
+	for (const [encoded, filename] of [
+		["back\\\\slash.config", "back\\slash.config"],
+		['double\\"quote.config', 'double"quote.config'],
+		["new\\nline.config", "new\nline.config"],
+		["tab\\tname.config", "tab\tname.config"],
+		["back\\bspace.config", "back\bspace.config"],
+	]) {
+		await writeFile(join(gitDir, filename), "[core]\nworktree = /elsewhere\n");
+		await writeFile(join(gitDir, "config"), `[include]\npath = "${encoded}"\n`);
+		const result = await analyze("git -C . status", repo);
+		assert.equal(result.command, "git -C . status", encoded);
+		assert.equal(result.target, undefined, encoded);
+		assert.match(result.error!, /core.worktree/, encoded);
+	}
+});
+
+test("rejects target-changing and malformed core settings reached through includes", async (t) => {
+	const { repo, gitDir } = await fixture(t);
+	await writeFile(join(gitDir, "config"), "[include]\npath = included.config\n");
+	for (const config of ["[core]\nworktree = /elsewhere\n", "[core]\nbare = maybe\n"]) {
+		await writeFile(join(gitDir, "included.config"), config);
+		const result = await analyze("git -C . status", repo);
+		assert.equal(result.command, "git -C . status");
+		assert.equal(result.target, undefined);
+		assert.match(result.error!, /core\.(worktree|bare)/);
+	}
+	await writeFile(join(gitDir, "config"), "[core]\nbare = false\n");
+	await writeFile(join(gitDir, "config.worktree"), "[include]\npath = included.config\n");
+	await writeFile(join(gitDir, "included.config"), "[core]\nbare = true\n");
+	assert.ok((await analyze("git status", repo)).error);
+});
+
+test("rejects conditional includes reached through unconditional includes", async (t) => {
+	const { repo, gitDir } = await fixture(t);
+	await writeFile(join(gitDir, "config"), "[include]\npath = included.config\n");
+	await writeFile(join(gitDir, "included.config"), '[includeIf "gitdir:*"]\npath = missing.config\n');
+	const result = await analyze("git -C . status", repo);
+	assert.equal(result.command, "git -C . status");
+	assert.equal(result.target, undefined);
+	assert.ok(result.error);
+});
+
+test("rejects config include cycles and excessive nesting", async (t) => {
+	const { repo, gitDir } = await fixture(t);
+	await writeFile(join(gitDir, "config"), "[include]\npath = first.config\n");
+	await writeFile(join(gitDir, "first.config"), "[include]\npath = second.config\n");
+	await writeFile(join(gitDir, "second.config"), "[include]\npath = first.config\n");
+	let result = await analyze("git -C . status", repo);
+	assert.equal(result.command, "git -C . status");
+	assert.equal(result.target, undefined);
+	assert.ok(result.error);
+	await writeFile(join(gitDir, "config"), "[include]\npath = depth-1.config\n");
+	for (let depth = 1; depth <= 12; depth += 1) {
+		await writeFile(join(gitDir, `depth-${depth}.config`), depth === 12
+			? "[delta]\nside-by-side = true\n"
+			: `[include]\npath = depth-${depth + 1}.config\n`);
+	}
+	result = await analyze("git -C . status", repo);
+	assert.equal(result.command, "git -C . status");
+	assert.equal(result.target, undefined);
+	assert.ok(result.error);
+});
+
+test("ignores absent unconditional include files", async (t) => {
+	const { root, repo, gitDir } = await fixture(t);
+	await writeFile(join(root, ".gitconfig"), "[include]\npath = ~/missing.config\n");
+	await writeFile(join(gitDir, "config"), "[core]\nbare = false\n[include]\npath = missing.config\npath = /elsewhere\n");
+	assert.deepEqual(await analyze("git -C . status", repo), {
+		command: "git status", target: { gitDir, workTree: repo },
+	});
 });
 
 test("does not resolve Git aliases that can select another repository", async (t) => {

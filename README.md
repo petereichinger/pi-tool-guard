@@ -102,7 +102,9 @@ For example, after approving the target of `git -C /projects/app push origin mai
 
 Target resolution handles repeated `-C`, `--git-dir`, `--work-tree`, and inherited or inline `GIT_DIR` / `GIT_WORK_TREE` assignments. Paths are resolved through symlinks. Linked worktrees are approved separately by their own metadata directory and working-tree pair. Bare repositories can use explicit `--git-dir` or `--bare`.
 
-Unknown targets require one-time confirmation and cannot be saved or normalized. Examples include dynamic shell expansions, remote SSH Git commands, unsupported Git environment variables or global options, `-c`, config includes, `core.worktree`, aliases, `init` / `clone`, and shell context changes that cannot be resolved safely. The ordinary command check then uses the original command. Git target approval applies to parsed Bash Git commands, not PowerShell scripts or commands hidden inside wrappers such as `env`.
+Static `[include]` config paths are resolved recursively, including relative paths and `~/` paths. Included settings receive the same target-safety checks as the containing config. Missing include files are ignored; conditional includes, invalid paths, and nesting beyond ten includes remain unresolved.
+
+Unknown targets require one-time confirmation and cannot be saved or normalized. Examples include dynamic shell expansions, remote SSH Git commands, unsupported Git environment variables or global options, `-c`, unresolved config includes, `core.worktree`, aliases, `init` / `clone`, and shell context changes that cannot be resolved safely. The ordinary command check then uses the original command. Git target approval applies to parsed Bash Git commands, not PowerShell scripts or commands hidden inside wrappers such as `env`.
 
 Explicit Git target deny rules override the current-repository default and saved target approvals. They block the command without offering an override prompt. Use `/guard-deny-git` to deny the current repository for this session, or specify scope and repository path:
 

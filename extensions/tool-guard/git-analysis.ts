@@ -93,6 +93,40 @@ async function discover(start: string): Promise<{ gitDir: string; workTree: stri
 	}
 }
 
+function includePath(value: string, file: string, home?: string): string {
+	let path = "";
+	let whitespace = "";
+	let quoted = false;
+	for (let index = 0; index < value.length; index += 1) {
+		const char = value[index];
+		if (!quoted && (char === "#" || char === ";")) break;
+		if (!quoted && /\s/.test(char)) {
+			whitespace += char;
+			continue;
+		}
+		path += whitespace;
+		whitespace = "";
+		if (char === '"') {
+			quoted = !quoted;
+		} else if (char === "\\") {
+			const escapes: Record<string, string> = { n: "\n", t: "\t", b: "\b", "\\": "\\", '"': '"' };
+			const escaped = escapes[value[++index]];
+			if (escaped === undefined) throw new Error("Git config include path has an invalid escape");
+			path += escaped;
+		} else {
+			path += char;
+		}
+	}
+	if (quoted) throw new Error("Git config include path has an unterminated quote");
+	if (!path || path.includes("\0")) throw new Error("Git config include path is empty or invalid");
+	if (path.startsWith("~/")) {
+		if (!home) throw new Error("Git config include home directory is unknown");
+		return physicalPath(home, path.slice(2));
+	}
+	if (path.startsWith("~")) throw new Error("Git config include user home cannot be resolved safely");
+	return physicalPath(dirname(file), path);
+}
+
 async function bareSetting(gitDir: string, cwd: string, env: Record<string, string | undefined>, subcommand?: string): Promise<boolean | undefined> {
 	const common = await optionalFile(join(gitDir, "commondir"));
 	let configDir = gitDir;
@@ -110,9 +144,10 @@ async function bareSetting(gitDir: string, cwd: string, env: Record<string, stri
 	if (home) globalFiles.push(resolve(cwd, home, ".gitconfig"));
 	const worktreeConfig = join(gitDir, "config.worktree");
 	let bare: boolean | undefined;
-	for (const file of [...globalFiles, join(configDir, "config"), worktreeConfig]) {
+	const readConfig = async (file: string, worktree: boolean, depth = 0): Promise<void> => {
+		if (depth > 10) throw new Error("Git config include depth exceeds the safe limit");
 		const contents = await optionalFile(file);
-		if (contents === undefined) continue;
+		if (contents === undefined) return;
 		let section = "";
 		for (const line of contents.split(/\r?\n/)) {
 			const trimmed = line.trim();
@@ -120,7 +155,13 @@ async function bareSetting(gitDir: string, cwd: string, env: Record<string, stri
 			const header = trimmed.match(/^\[([^\]]+)\]\s*(?:[#;].*)?$/);
 			if (header) {
 				section = header[1].trim().toLowerCase();
-				if (/^include(?:if)?(?:\s|\.|$)/.test(section)) throw new Error("Git config includes cannot be resolved safely");
+				if (/^includeif(?:\s|\.|$)/.test(section)) throw new Error("Git conditional config includes cannot be resolved safely");
+				continue;
+			}
+			if (section === "include") {
+				const match = trimmed.match(/^path\s*=\s*(.*)$/i);
+				if (!match) throw new Error("Git config include cannot be resolved safely");
+				await readConfig(includePath(match[1], file, home), worktree, depth + 1);
 				continue;
 			}
 			if (section === "alias" && subcommand && trimmed.match(/^([^\s=]+)\s*(?:=|$)/)?.[1].toLowerCase() === subcommand.toLowerCase()) {
@@ -129,12 +170,15 @@ async function bareSetting(gitDir: string, cwd: string, env: Record<string, stri
 			if (section !== "core") continue;
 			if (/^worktree\s*(?:=|$)/i.test(trimmed)) throw new Error("Git core.worktree config cannot be resolved safely");
 			if (/^bare\s*(?:=|$)/i.test(trimmed)) {
-				if (file === worktreeConfig) throw new Error("Git worktree-specific core.bare config cannot be resolved safely");
+				if (worktree) throw new Error("Git worktree-specific core.bare config cannot be resolved safely");
 				const match = trimmed.match(/^bare(?:\s*=\s*(true|false|yes|no|on|off|1|0|"true"|"false"))?\s*(?:[#;].*)?$/i);
 				if (!match) throw new Error("Git core.bare config cannot be resolved safely");
 				bare = match[1] === undefined || ["true", "yes", "on", "1", '"true"'].includes(match[1].toLowerCase());
 			}
 		}
+	};
+	for (const file of [...globalFiles, join(configDir, "config"), worktreeConfig]) {
+		await readConfig(file, file === worktreeConfig);
 	}
 	return bare;
 }

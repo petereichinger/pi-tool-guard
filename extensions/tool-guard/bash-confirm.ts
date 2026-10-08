@@ -52,6 +52,7 @@ export async function confirmShell(
 		const sameTarget = (a: GitTarget, b: GitTarget) => a.gitDir === b.gitDir && a.workTree === b.workTree;
 		const allowedOnceIndexes = new Set<number>();
 		const approvedGitIndexes = new Set<number>();
+		const approvedGitTargets: GitTarget[] = [];
 		let promptStage: "action" | "save" = "action";
 		while (true) {
 			if (isBypassed()) return undefined;
@@ -69,6 +70,7 @@ export async function confirmShell(
 		if (deniedGit) return { block: true, reason: `Git target denied: ${deniedGit.git!.target!.gitDir}; command: ${deniedGit.originalCommand ?? deniedGit.command}` } as const;
 		const pendingGit = evaluation.commands.find((item) => item.git && !approvedGitIndexes.has(item.index) && (
 			!item.git.target || ![
+				...approvedGitTargets,
 				...(currentGitTarget ? [currentGitTarget] : []),
 				...(gitOptions?.sessionTargets ?? []), ...(activeConfig.gitAllowTargets ?? []),
 			].some((target) => sameTarget(target, item.git!.target!))
@@ -86,7 +88,8 @@ export async function confirmShell(
 					return { block: true, reason: `Could not save Git target: ${error.message}` } as const;
 				}
 			}
-			approvedGitIndexes.add(pendingGit.index);
+			if (pendingGit.git!.target) approvedGitTargets.push(pendingGit.git!.target);
+			else approvedGitIndexes.add(pendingGit.index);
 			continue;
 		}
 		if (evaluation.pendingDangerous.length === 0) return undefined;

@@ -30,8 +30,19 @@ async function fixture(t: any) {
 	await mkdir(repo);
 	await metadata(join(repo, ".git"));
 	t.after(() => rm(root, { recursive: true, force: true }));
-	process.env.HOME = root;
+	const keys = ["HOME", "XDG_CONFIG_HOME", "TOOL_GUARD_TEST_TARGET", "REPO", "VALUE"];
+	const inherited = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+	t.after(() => {
+		for (const key of keys) {
+			if (inherited[key] === undefined) delete process.env[key];
+			else process.env[key] = inherited[key];
+		}
+	});
+	process.env.HOME = root.replaceAll("\\", "/");
 	process.env.XDG_CONFIG_HOME = join(root, ".config");
+	process.env.TOOL_GUARD_TEST_TARGET = repo.replaceAll("\\", "/");
+	delete process.env.REPO;
+	delete process.env.VALUE;
 	return { root: await realpath(root), repo: await realpath(repo), gitDir: await realpath(join(repo, ".git")) };
 }
 
@@ -54,6 +65,73 @@ test("discovers metadata from a nested working directory", async (t) => {
 	assert.deepEqual(await analyze("git status --short", nested), {
 		command: "git status --short", target: { gitDir, workTree: repo },
 	});
+});
+
+test("resolves inherited home and simple variables in Git target arguments", async (t) => {
+	const { root, repo, gitDir } = await fixture(t);
+	for (const target of ["$HOME/repo", "${HOME}/repo", '"$HOME/repo"', '"${HOME}/repo"', "$TOOL_GUARD_TEST_TARGET", '"${TOOL_GUARD_TEST_TARGET}"']) {
+		assert.deepEqual(await analyze(`git -C ${target} status`, root), {
+			command: "git status", target: { gitDir, workTree: repo },
+		}, target);
+	}
+	assert.deepEqual(await analyze('git --git-dir="${HOME}/repo/.git" --work-tree=$HOME/repo status', root), {
+		command: "git status", target: { gitDir, workTree: repo },
+	});
+});
+
+test("requires quotes around expanded Git paths containing spaces", async (t) => {
+	const { root } = await fixture(t);
+	const repo = join(root, "some repo");
+	await mkdir(repo);
+	const gitDir = join(repo, ".git");
+	await metadata(gitDir);
+	process.env.TOOL_GUARD_TEST_TARGET = repo.replaceAll("\\", "/");
+	assert.deepEqual(await analyze('git -C "$TOOL_GUARD_TEST_TARGET" status', root), {
+		command: "git status", target: { gitDir, workTree: repo },
+	});
+	const command = "git -C $TOOL_GUARD_TEST_TARGET status";
+	const result = await analyze(command, root);
+	assert.equal(result.command, command);
+	assert.equal(result.target, undefined);
+	assert.ok(result.error);
+});
+
+test("resolves inline Git target assignments using the inherited environment", async (t) => {
+	const { root, repo, gitDir } = await fixture(t);
+	for (const command of [
+		"GIT_DIR=${HOME}/repo/.git GIT_WORK_TREE=$HOME/repo git status",
+		'GIT_DIR="$HOME/repo/.git" GIT_WORK_TREE="${HOME}/repo" git status',
+	]) {
+		assert.deepEqual(await analyze(command, root), {
+			command: "git status", target: { gitDir, workTree: repo },
+		});
+	}
+	const otherHome = join(root, "other-home");
+	await mkdir(otherHome);
+	const prefix = `HOME='${otherHome.replaceAll("\\", "/")}'`;
+	assert.deepEqual(await analyze(`${prefix} git -C "$HOME/repo" status`, root), {
+		command: `${prefix} git status`, target: { gitDir, workTree: repo },
+	});
+	const otherRepo = join(otherHome, "repo");
+	await mkdir(otherRepo);
+	const otherGitDir = join(otherRepo, ".git");
+	await metadata(otherGitDir);
+	assert.deepEqual(await analyze(`${prefix} GIT_DIR=\${HOME}/repo/.git GIT_WORK_TREE=$HOME/repo git status`, root), {
+		command: `${prefix} git status`, target: { gitDir: otherGitDir, workTree: otherRepo },
+	});
+});
+
+test("resolves MSYS Git target paths on Windows", { skip: process.platform !== "win32" }, async (t) => {
+	const { root, repo, gitDir } = await fixture(t);
+	const msys = (path: string) => path.replace(/^([a-zA-Z]):[\\/]/, (_match, drive) => `/${drive.toLowerCase()}/`).replaceAll("\\", "/");
+	for (const command of [
+		`git -C '${msys(repo)}' status`,
+		`git --git-dir='${msys(gitDir)}' --work-tree='${msys(repo)}' status`,
+	]) {
+		assert.deepEqual(await analyze(command, root), {
+			command: "git status", target: { gitDir, workTree: repo },
+		});
+	}
 });
 
 test("normalizes repeated and attached -C options relative to each preceding directory", async (t) => {
@@ -182,6 +260,7 @@ test("returns the original command for dynamic, ambiguous, or unsupported invoca
 	for (const command of [
 		'git -C "$REPO" status', "git -C ~/repo status", "git -C repo* status", "git -C $(pwd) status",
 		"git status *.ts", "GIT_DIR=$REPO git status", "GIT_DIR=~/repo git status", "FOO=$VALUE git status",
+		'git -C "${HOME:-/elsewhere}/repo" status', 'git -C "${HOME}/repo" status "$REPO"',
 		"git -C", "git --git-dir", "git --work-tree", "git --git-dir= status", "git --work-tree= status",
 		"git -c core.worktree=/elsewhere status", "git -ccore.bare=true status", "git --config-env=core.worktree=TARGET status",
 		"git --namespace=other status", "git --exec-path=/elsewhere status", "git --unknown status",
@@ -397,12 +476,15 @@ test("requires metadata object and reference directories before returning a targ
 	assert.ok(result.error);
 });
 
-test("resolves symlink traversal before parent segments in a single path", async (t) => {
+test("resolves symlink traversal before parent segments in a single path", { skip: process.platform === "win32" }, async (t) => {
 	const { root, repo } = await fixture(t);
 	const other = join(root, "other");
 	await mkdir(join(other, "child"), { recursive: true });
 	await metadata(join(other, ".git"));
 	await symlink(join(other, "child"), join(repo, "link"));
+	assert.deepEqual((await analyze('git -C "${TOOL_GUARD_TEST_TARGET}/link/.." status', repo)).target, {
+		gitDir: join(other, ".git"), workTree: other,
+	});
 	assert.deepEqual((await analyze("git -C link/.. status", repo)).target, {
 		gitDir: join(other, ".git"), workTree: other,
 	});
@@ -426,6 +508,11 @@ test("does not assume unchanged Git environment after shell mutations", async (t
 		"printf -v GIT_DIR other; git status",
 		"for GIT_DIR in other; do git status; done",
 		"export GIT_DIR=other; git status",
+		'HOME=/elsewhere; git -C "$HOME/repo" status',
+		'export HOME=/elsewhere; git -C "${HOME}/repo" status',
+		'printf -v HOME /elsewhere; git -C "$HOME/repo" status',
+		'for HOME in /elsewhere; do git -C "$HOME/repo" status; done',
+		'TOOL_GUARD_TEST_TARGET=/elsewhere; git -C "$TOOL_GUARD_TEST_TARGET" status',
 	]) {
 		const analysis = await analyzeBash(command, repo);
 		const git = analysis.commands.find((item) => item.name === "git");

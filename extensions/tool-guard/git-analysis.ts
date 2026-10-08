@@ -1,6 +1,7 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import { staticShellWord } from "./shell-word.ts";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { physicalShellPath as physicalPath, shellDirectory as directory } from "./shell-path.ts";
 
 export type GitInvocationAnalysis = {
 	command: string;
@@ -33,17 +34,6 @@ const SUPPORTED_SUBCOMMANDS = new Set([
 ]);
 
 
-
-function physicalPath(base: string, path: string): string {
-	return isAbsolute(path) ? path : `${base}${sep}${path}`;
-}
-
-async function directory(path: string): Promise<string> {
-	const canonical = await realpath(path);
-	if (!(await stat(canonical)).isDirectory()) throw new Error(`Not a directory: ${path}`);
-	return canonical;
-}
-
 async function optionalFile(path: string): Promise<string | undefined> {
 	try {
 		return await readFile(path, "utf8");
@@ -54,7 +44,7 @@ async function optionalFile(path: string): Promise<string | undefined> {
 }
 
 async function metadataDirectory(path: string): Promise<string> {
-	const canonical = await realpath(path);
+	const canonical = await realpath(physicalPath(process.cwd(), path));
 	if ((await stat(canonical)).isDirectory()) return validateMetadataDirectory(canonical);
 	const contents = await readFile(canonical, "utf8");
 	const match = contents.match(/^gitdir: ([^\r\n]+)\r?\n?$/);
@@ -221,15 +211,16 @@ export async function analyzeGitInvocation(node: any, cwd?: string): Promise<Git
 		const children: any[] = node.namedChildren ?? (node.children ?? []).filter((child: any) => child.isNamed);
 		const assignments = children.filter((child) => child.type === "variable_assignment");
 		const args = children.filter((child) => child !== name && child.type !== "variable_assignment" && child.type !== "file_redirect");
-		const values = args.map((arg) => staticShellWord(arg.text));
+		const inheritedEnv: Record<string, string | undefined> = { ...process.env };
+		const values = args.map((arg) => staticShellWord(arg.text, inheritedEnv));
 		if (values.some((value) => value === undefined)) return fail("Git arguments use shell expansion");
 		const argv = values as string[];
-		const env: Record<string, string | undefined> = { ...process.env };
+		const env = { ...inheritedEnv };
 		const removed = new Set<any>();
 		for (const assignment of assignments) {
 			const match = assignment.text.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s);
 			if (!match) return fail("Git environment assignment is ambiguous");
-			const value = staticShellWord(match[2]);
+			const value = staticShellWord(match[2], env, "assignment");
 			if (value === undefined) return fail("Git environment assignment uses shell expansion");
 			env[match[1]] = value;
 			if (match[1] === "GIT_DIR" || match[1] === "GIT_WORK_TREE") removed.add(assignment);

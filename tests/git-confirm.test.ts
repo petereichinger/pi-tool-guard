@@ -187,6 +187,35 @@ test("session target save is reusable but does not save an operation rule", asyn
 	assert.equal(f.prompts.length, 4);
 });
 
+test("once approves a resolved target for all subcommands in only the current tool call", async (t) => {
+	const f = await fixture(t);
+	const command = "git -C repo status && git -C ./repo diff && git -C repo push";
+	for (let call = 0; call < 2; call += 1) {
+		f.answers.push("Allow once", "Allow once");
+		assert.equal(await f.run(command), undefined);
+	}
+	assert.deepEqual(stages(f.prompts), ["target", "operation", "target", "operation"]);
+	assert.deepEqual(f.sessionTargets, []);
+	assert.deepEqual(f.saved, []);
+});
+
+test("once does not approve a different worktree paired with the same metadata", async (t) => {
+	const f = await fixture(t);
+	f.answers.push("Allow once", "Deny");
+	const command = `git -C repo status && git --git-dir='${f.target.gitDir}' --work-tree='${f.root}' status`;
+	assert.equal((await f.run(command))?.block, true);
+	assert.deepEqual(stages(f.prompts), ["target", "target"]);
+	assert.ok(f.prompts[1].title.includes(`Worktree: ${f.root}`));
+});
+
+test("unknown targets still require separate approval for each subcommand", async (t) => {
+	const f = await fixture(t);
+	f.answers.push("Allow once", "Deny");
+	assert.equal((await f.run('git -C "$REPO" status && git -C "$REPO" diff'))?.block, true);
+	assert.deepEqual(stages(f.prompts), ["target", "target"]);
+	assert.ok(f.prompts.every((prompt) => prompt.title.includes("Unknown target")));
+});
+
 test("all Git targets are approved before once allows a multi-command operation", async (t) => {
 	const f = await fixture(t);
 	await f.repository("second");
@@ -195,6 +224,7 @@ test("all Git targets are approved before once allows a multi-command operation"
 	assert.deepEqual(stages(f.prompts), ["target", "target", "operation"]);
 	assert.match(f.prompts[0].title, /repo push/);
 	assert.match(f.prompts[1].title, /second push/);
+	assert.ok(f.prompts.every((prompt) => !prompt.title.includes("Unknown target")));
 });
 
 test("a blocked later Git target prevents operation-once approval", async (t) => {

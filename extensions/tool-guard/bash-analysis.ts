@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import { analyzeGitInvocation } from "./git-analysis.ts";
 import { staticShellWord } from "./shell-word.ts";
 import {
@@ -8,15 +7,10 @@ import {
 	GIT_READ_ONLY_SUBCOMMANDS,
 	READ_ONLY_COMMANDS,
 } from "./constants.ts";
-import { canonicalizeForPolicy, isInside, realpathOrResolve } from "./path-policy.ts";
+import { isInside } from "./path-policy.ts";
+import { physicalShellPath, shellDirectory } from "./shell-path.ts";
 import { getBashParser } from "./tree-sitter.ts";
 import type { BashAnalysis, BashCommandRisk } from "./types.ts";
-
-export function normalizeCdTargetForHost(target: string, platform: NodeJS.Platform = process.platform): string {
-	if (platform !== "win32") return target;
-	const msysDrivePath = target.match(/^\/([a-zA-Z])(?:\/(.*))?$/);
-	return msysDrivePath ? `${msysDrivePath[1].toUpperCase()}:/${msysDrivePath[2] ?? ""}` : target;
-}
 
 function stripShellQuotes(value: string): string {
 	if (value.length >= 2) {
@@ -104,8 +98,11 @@ async function riskForCommand(node: any, splitter?: string, cwd?: string): Promi
 	if (name === "assignment") return withSplitter({ command, name, harmless: true, reason: "variable assignment only" });
 
 	if (name === "cd") {
+		if (process.env.CDPATH || (node.namedChildren ?? []).some((child: any) => child.type === "variable_assignment")) {
+			return withSplitter({ command, name, harmless: false, reason: "cd environment cannot be checked" });
+		}
 		if (!cwd) return withSplitter({ command, name, harmless: false, reason: "cd destination cannot be checked" });
-		const values = commandArgumentNodes(node).map((argument) => staticShellWord(argument.text));
+		const values = commandArgumentNodes(node).map((argument) => staticShellWord(argument.text, process.env));
 		if (values.some((value) => value === undefined)) {
 			return withSplitter({ command, name, harmless: false, reason: "cd destination uses shell expansion" });
 		}
@@ -126,8 +123,14 @@ async function riskForCommand(node: any, splitter?: string, cwd?: string): Promi
 		if (!target || target === "-") {
 			return withSplitter({ command, name, harmless: false, reason: "cd destination cannot be checked" });
 		}
-		const cwdReal = await realpathOrResolve(cwd);
-		const targetReal = await canonicalizeForPolicy(resolve(cwd, normalizeCdTargetForHost(target)));
+		let cwdReal: string;
+		let targetReal: string;
+		try {
+			cwdReal = await shellDirectory(cwd);
+			targetReal = await shellDirectory(physicalShellPath(cwdReal, target));
+		} catch {
+			return withSplitter({ command, name, harmless: false, reason: "cd destination cannot be checked" });
+		}
 		return isInside(cwdReal, targetReal)
 			? withSplitter({ command, name, harmless: true, reason: "cd stays inside current working directory" })
 			: withSplitter({ command, name, harmless: false, reason: "cd leaves current working directory" });
@@ -269,22 +272,23 @@ async function risksForParsedCommand(command: string, parser: any, depth = 0, cw
 	for (const node of sortedNodes) {
 		const splitter = command.slice(previousEnd, node.startIndex).trim();
 		previousEnd = getCommandSegmentNode(node).endIndex;
-		let risk = await riskForCommand(node, splitter || undefined, cwd);
-		if (risk.name === "git") {
-			const contextChanges = (entry: any): boolean => {
-				if (entry.startIndex >= node.startIndex) return false;
-				if (entry.type === "variable_assignment" || entry.type === "declaration_command") return true;
-				if (entry.type === "command") {
-					const name = getCommandName(entry);
-					if (!name || !READ_ONLY_COMMANDS.has(name) || ["printf", "command", "git"].includes(name)) return true;
-				}
-				return (entry.namedChildren ?? []).some(contextChanges);
-			};
-			let nestedContext = false;
-			for (let parent = node.parent; parent; parent = parent.parent) {
-				if (["for_statement", "while_statement", "c_style_for_statement", "function_definition", "subshell"].includes(parent.type)) nestedContext = true;
+		const contextChanges = (entry: any): boolean => {
+			if (entry.startIndex >= node.startIndex) return false;
+			if (entry.type === "variable_assignment" || entry.type === "declaration_command") return true;
+			if (entry.type === "command") {
+				const name = getCommandName(entry);
+				if (!name || !READ_ONLY_COMMANDS.has(name) || ["printf", "command"].includes(name)) return true;
 			}
-			const git = await analyzeGitInvocation(node, nestedContext || contextChanges(tree.rootNode) ? undefined : gitCwd);
+			return (entry.namedChildren ?? []).some(contextChanges);
+		};
+		let nestedContext = false;
+		for (let parent = node.parent; parent; parent = parent.parent) {
+			if (["for_statement", "while_statement", "c_style_for_statement", "function_definition", "subshell"].includes(parent.type)) nestedContext = true;
+		}
+		const contextUnknown = nestedContext || contextChanges(tree.rootNode);
+		let risk = await riskForCommand(node, splitter || undefined, contextUnknown ? undefined : cwd);
+		if (risk.name === "git") {
+			const git = await analyzeGitInvocation(node, contextUnknown ? undefined : gitCwd);
 			const normalizedNodes: any[] = [];
 			if (git.target) collectCommandNodes(parser.parse(git.command).rootNode, normalizedNodes);
 			const normalizedNode = normalizedNodes[0];

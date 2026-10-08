@@ -26,13 +26,15 @@ export function canonicalizeGitTarget(value: unknown): GitTarget {
 	const target = value as GitTarget;
 	const canonicalize = (path: unknown): string => {
 		if (typeof path !== "string" || path.includes("\0")) {
-			throw new Error("Git target paths must be absolute strings or start with $HOME/");
+			throw new Error("Git target paths must be absolute strings, optionally using environment variables");
 		}
-		const expanded = path.replace(/^\$(?:HOME|\{HOME\})(?=\/|$)/, () => {
-			if (!process.env.HOME) throw new Error("$HOME is not set");
-			return process.env.HOME;
+		const expanded = path.replace(/\$([A-Za-z_][A-Za-z0-9_]*)|\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, bareName: string | undefined, bracedName: string | undefined) => {
+			const name = bareName ?? bracedName!;
+			const value = process.env[name];
+			if (value === undefined) throw new Error(`Environment variable $${name} is not set`);
+			return value;
 		});
-		if (!isAbsolute(expanded)) throw new Error("Git target paths must be absolute strings or start with $HOME/");
+		if (!isAbsolute(expanded)) throw new Error("Git target paths must resolve to absolute paths");
 		let current = resolve(expanded);
 		const missing: string[] = [];
 		while (true) {

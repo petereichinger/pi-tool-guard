@@ -19,20 +19,28 @@ const {
 
 test.after(() => rm(root, { recursive: true, force: true }));
 
-test("expands $HOME in stored Git targets", () => {
+test("expands environment variables in stored Git targets", () => {
 	const originalHome = process.env.HOME;
+	const originalRepoRoot = process.env.TOOL_GUARD_TEST_REPO_ROOT;
 	process.env.HOME = root;
+	process.env.TOOL_GUARD_TEST_REPO_ROOT = join(root, ".local/share/chezmoi");
 	try {
 		assert.deepEqual(canonicalizeGitTarget({
 			gitDir: "$HOME/.local/share/chezmoi/.git",
-			workTree: "${HOME}/.local/share/chezmoi",
+			workTree: "${TOOL_GUARD_TEST_REPO_ROOT}",
 		}), {
 			gitDir: join(root, ".local/share/chezmoi/.git"),
 			workTree: join(root, ".local/share/chezmoi"),
 		});
+		assert.throws(() => canonicalizeGitTarget({
+			gitDir: "$TOOL_GUARD_MISSING/.git",
+			workTree: root,
+		}), /Environment variable \$TOOL_GUARD_MISSING is not set/);
 	} finally {
 		if (originalHome === undefined) delete process.env.HOME;
 		else process.env.HOME = originalHome;
+		if (originalRepoRoot === undefined) delete process.env.TOOL_GUARD_TEST_REPO_ROOT;
+		else process.env.TOOL_GUARD_TEST_REPO_ROOT = originalRepoRoot;
 	}
 });
 

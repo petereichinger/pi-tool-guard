@@ -275,14 +275,57 @@ test("returns the original command for dynamic, ambiguous, or unsupported invoca
 	}
 });
 
-test("rejects inherited target-affecting environment without normalizing", async (t) => {
+test("rejects explicit Git environment overrides without normalizing", async (t) => {
 	const { repo } = await fixture(t);
-	process.env.GIT_COMMON_DIR = "";
-	t.after(() => delete process.env.GIT_COMMON_DIR);
-	const result = await analyze("git -C . status", repo);
-	assert.equal(result.command, "git -C . status");
-	assert.equal(result.target, undefined);
-	assert.match(result.error!, /GIT_COMMON_DIR/);
+	const keys = [
+		"GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+		"GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_IMPLICIT_WORK_TREE",
+		"GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE", "GIT_QUARANTINE_PATH", "GIT_REFERENCE_BACKEND",
+		"GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_PARAMETERS",
+		"GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_12", "GIT_ATTR_SOURCE", "GIT_ATTR_NOSYSTEM",
+		"GIT_EXEC_PATH", "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GIT_SSH",
+		"GIT_SSH_COMMAND", "GIT_PROXY_COMMAND", "GIT_ASKPASS", "GIT_MAN_VIEWER", "GIT_ASK_YESNO",
+		"GIT_STRACE_COMMANDS", "GIT_TEST_FSMONITOR", "GIT_TEST_MAINT_SCHEDULER",
+		"GIT_TRACE", "GIT_TRACE_BARE", "GIT_TRACE_CURL", "GIT_TRACE_FSMONITOR", "GIT_TRACE_PACKET",
+		"GIT_TRACE_PACKFILE", "GIT_TRACE_PACK_ACCESS", "GIT_TRACE_PERFORMANCE", "GIT_TRACE_REFS", "GIT_TRACE_SETUP",
+		"GIT_TRACE_SHALLOW", "GIT_TRACE_WORKING_TREE_ENCODING", "GIT_TRACE2", "GIT_TRACE2_EVENT", "GIT_TRACE2_PERF",
+		"GIT_REDIRECT_STDIN", "GIT_REDIRECT_STDOUT", "GIT_REDIRECT_STDERR",
+	];
+	t.after(() => {
+		for (const key of keys) delete process.env[key];
+	});
+	for (const key of keys) {
+		for (const value of ["", "/elsewhere"]) {
+			process.env[key] = value;
+			const inherited = await analyze("git -C . status", repo);
+			delete process.env[key];
+			const command = `${key}='${value}' git -C . status`;
+			const inline = await analyze(command, repo);
+			for (const [result, original] of [[inherited, "git -C . status"], [inline, command]] as const) {
+				assert.equal(result.command, original, key);
+				assert.equal(result.target, undefined, key);
+				assert.equal(result.error, `Git environment variable ${key} cannot be resolved safely`, key);
+			}
+		}
+	}
+});
+
+test("resolves targets with unrelated Git environment variables", async (t) => {
+	const { repo, gitDir } = await fixture(t);
+	const keys = ["GIT_INSTALL_ROOT", "GIT_AUTHOR_NAME", "GIT_TERMINAL_PROMPT", "GIT_CUSTOM_SETTING", "GIT_CONFIG_KEY_CUSTOM"];
+	t.after(() => {
+		for (const key of keys) delete process.env[key];
+	});
+	for (const key of keys) {
+		process.env[key] = "value";
+		assert.deepEqual(await analyze("git -C . status", repo), {
+			command: "git status", target: { gitDir, workTree: repo },
+		}, key);
+		delete process.env[key];
+		assert.deepEqual(await analyze(`${key}=value git -C . status`, repo), {
+			command: `${key}=value git status`, target: { gitDir, workTree: repo },
+		}, key);
+	}
 });
 
 test("rejects an unknown working directory, including remote invocations", async () => {
@@ -452,7 +495,8 @@ test("rejects config include cycles and excessive nesting", async (t) => {
 test("ignores absent unconditional include files", async (t) => {
 	const { root, repo, gitDir } = await fixture(t);
 	await writeFile(join(root, ".gitconfig"), "[include]\npath = ~/missing.config\n");
-	await writeFile(join(gitDir, "config"), "[core]\nbare = false\n[include]\npath = missing.config\npath = /elsewhere\n");
+	const missingAbsolutePath = join(root, "missing-absolute.config").replaceAll("\\", "/");
+	await writeFile(join(gitDir, "config"), `[core]\nbare = false\n[include]\npath = missing.config\npath = "${missingAbsolutePath}"\n`);
 	assert.deepEqual(await analyze("git -C . status", repo), {
 		command: "git status", target: { gitDir, workTree: repo },
 	});

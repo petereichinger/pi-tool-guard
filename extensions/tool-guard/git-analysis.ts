@@ -15,6 +15,21 @@ const SAFE_GLOBAL_OPTIONS = new Set([
 	"--version", "-v", "--help", "-h", "--html-path", "--man-path", "--info-path",
 ]);
 
+const UNSUPPORTED_GIT_ENVIRONMENT = new Set([
+	"GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+	"GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_IMPLICIT_WORK_TREE",
+	"GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE", "GIT_QUARANTINE_PATH", "GIT_REFERENCE_BACKEND",
+	"GIT_CONFIG", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_PARAMETERS",
+	"GIT_CONFIG_COUNT", "GIT_ATTR_SOURCE", "GIT_ATTR_NOSYSTEM",
+	"GIT_EXEC_PATH", "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GIT_SSH",
+	"GIT_SSH_COMMAND", "GIT_PROXY_COMMAND", "GIT_ASKPASS", "GIT_MAN_VIEWER", "GIT_ASK_YESNO",
+	"GIT_STRACE_COMMANDS", "GIT_TEST_FSMONITOR", "GIT_TEST_MAINT_SCHEDULER",
+	"GIT_TRACE", "GIT_TRACE_BARE", "GIT_TRACE_CURL", "GIT_TRACE_FSMONITOR", "GIT_TRACE_PACKET",
+	"GIT_TRACE_PACKFILE", "GIT_TRACE_PACK_ACCESS", "GIT_TRACE_PERFORMANCE", "GIT_TRACE_REFS", "GIT_TRACE_SETUP",
+	"GIT_TRACE_SHALLOW", "GIT_TRACE_WORKING_TREE_ENCODING", "GIT_TRACE2", "GIT_TRACE2_EVENT", "GIT_TRACE2_PERF",
+	"GIT_REDIRECT_STDIN", "GIT_REDIRECT_STDOUT", "GIT_REDIRECT_STDERR",
+]);
+
 const SUPPORTED_SUBCOMMANDS = new Set([
 	"add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bundle", "cat-file",
 	"check-attr", "check-ignore", "check-mailmap", "check-ref-format", "checkout", "checkout-index", "cherry",
@@ -226,7 +241,7 @@ export async function analyzeGitInvocation(node: any, cwd?: string): Promise<Git
 			if (match[1] === "GIT_DIR" || match[1] === "GIT_WORK_TREE") removed.add(assignment);
 		}
 		for (const key of Object.keys(env)) {
-			if (env[key] !== undefined && key.startsWith("GIT_") && key !== "GIT_DIR" && key !== "GIT_WORK_TREE") {
+			if (env[key] !== undefined && (UNSUPPORTED_GIT_ENVIRONMENT.has(key) || /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key))) {
 				return fail(`Git environment variable ${key} cannot be resolved safely`);
 			}
 		}

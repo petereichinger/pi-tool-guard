@@ -1,10 +1,15 @@
 import { resolve } from "node:path";
-import { READ_ONLY_COMMANDS } from "./constants.ts";
 import { physicalShellPath, shellDirectory } from "./shell-path.ts";
 import { staticShellWord } from "./shell-word.ts";
 
 export type BashCommandContext = { cwd: string; env: Record<string, string | undefined> };
 type Outcomes = { success?: BashCommandContext; failure?: BashCommandContext };
+
+const SHELL_CONTEXT_COMMANDS = new Set([
+	".", "source", "eval", "exec", "command", "builtin", "export", "unset", "set", "shopt",
+	"declare", "typeset", "local", "readonly", "read", "readarray", "mapfile", "printf", "let",
+	"getopts", "shift", "pushd", "popd", "alias", "unalias", "enable", "hash", "trap", "fc", "bind",
+]);
 
 function commandName(node: any): string | undefined {
 	const name = node.childForFieldName?.("name");
@@ -105,7 +110,7 @@ export async function bashCommandContexts(root: any, cwd?: string): Promise<Map<
 			contexts.set(node.startIndex, current);
 			const name = commandName(node);
 			if (name === "cd") return { success: await cdDestination(node, current), failure: current };
-			const changesContext = !name || !READ_ONLY_COMMANDS.has(name) || ["printf", "command"].includes(name) ||
+			const changesContext = !name || SHELL_CONTEXT_COMMANDS.has(name) ||
 				(node.namedChildren ?? []).some((child: any) => child.type === "variable_assignment" || staticShellWord(child.text, current?.env) === undefined);
 			const state = changesContext ? undefined : current;
 			return { success: state, failure: state };

@@ -107,6 +107,36 @@ test("cd to another repository still requires target approval", async (t) => {
 	assert.ok(!f.prompts[0].title.includes("Unknown target"));
 });
 
+test("external command approval does not need current Git target approval", async (t) => {
+	const f = await fixture(t);
+	f.ctx.cwd = f.target.workTree!;
+	const command = "gh stack view; git status --short; git diff --stat; git diff --check";
+	f.answers.push("Allow once");
+	assert.equal(await f.run(command), undefined);
+	assert.deepEqual(stages(f.prompts), ["operation"]);
+	assert.ok(f.prompts[0].title.includes("gh stack view"));
+	assert.deepEqual(f.sessionTargets, []);
+	f.allow.push(rule("gh stack view"));
+	f.ctx.hasUI = false;
+	assert.equal(await f.run(command), undefined);
+	f.sessionDenyTargets.push(f.target);
+	assert.match((await f.run(command))?.reason ?? "", /Git target denied/);
+});
+
+test("external commands preserve other Git targets and Git operation checks", async (t) => {
+	const f = await fixture(t);
+	const other = await f.repository("other");
+	f.ctx.cwd = f.target.workTree!;
+	f.allow.push(rule("gh stack view"));
+	f.answers.push("Deny", "Deny");
+	assert.equal((await f.run(`gh stack view; git -C '${other.workTree!.replaceAll("\\", "/")}' status`))?.block, true);
+	assert.equal((await f.run("gh stack view; git push"))?.block, true);
+	assert.deepEqual(stages(f.prompts), ["target", "operation"]);
+	assert.ok(!f.prompts[0].title.includes("Unknown target"));
+	f.deny.push(rule("git status", "deny"));
+	assert.match((await f.run("gh stack view; git status"))?.reason ?? "", /denied by/);
+});
+
 test("safe global includes preserve current repository approval and explicit denies", async (t) => {
 	const f = await fixture(t);
 	await mkdir(join(f.root, ".config", "delta"), { recursive: true });

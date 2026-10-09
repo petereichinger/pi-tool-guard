@@ -618,10 +618,54 @@ test("cd keeps logical and physical symlink traversal separate", { skip: process
 	}
 });
 
+test("external commands preserve Git context without becoming harmless", async (t) => {
+	const { repo, gitDir } = await fixture(t);
+	for (const command of [
+		"gh stack view; git status --short; git diff --stat; git diff --check",
+		"gh stack view && git status",
+		"gh stack view || git status",
+		"npm test; git status",
+		"custom-tool; git status",
+		"gh stack view && cd . && git status",
+		"cd . && gh stack view && git status",
+	]) {
+		const analysis = await analyzeBash(command, repo);
+		const external = analysis.commands.find((item) => ["gh", "npm", "custom-tool"].includes(item.name));
+		assert.ok(external, command);
+		assert.equal(external.harmless, false, command);
+		for (const item of analysis.commands.filter((item) => item.name === "git")) {
+			assert.deepEqual(item.git?.target, { gitDir, workTree: repo }, command);
+			assert.equal(item.harmless, true, command);
+		}
+	}
+});
+
 test("does not assume unchanged Git environment after shell mutations", async (t) => {
 	const { repo } = await fixture(t);
 	for (const command of [
 		"GIT_DIR+=other; git status",
+		"unset GIT_DIR; git status",
+		"read GIT_DIR; git status",
+		"readarray GIT_DIR; git status",
+		"mapfile GIT_DIR; git status",
+		"set -- other; git status",
+		"shopt -s cdable_vars; git status",
+		"source other; git status",
+		". other; git status",
+		"eval 'cd other'; git status",
+		"command cd other; git status",
+		"builtin cd other; git status",
+		"pushd other; git status",
+		"popd; git status",
+		"alias git=other; git status",
+		"trap 'cd other' DEBUG; git status",
+		"declare GIT_DIR=other; git status",
+		"typeset GIT_DIR=other; git status",
+		"readonly GIT_DIR=other; git status",
+		"custom-tool \"${GIT_DIR:=other}\"; git status",
+		"custom-tool > \"${GIT_DIR:=other}/file\"; git status",
+		"GIT_DIR=other custom-tool; git status",
+		"custom-tool() { cd other; }; custom-tool; git status",
 		"printf -v GIT_DIR other; git status",
 		"for GIT_DIR in other; do git status; done",
 		"export GIT_DIR=other; git status",

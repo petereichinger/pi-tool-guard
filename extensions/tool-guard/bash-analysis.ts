@@ -1,4 +1,5 @@
 import { analyzeGitInvocation } from "./git-analysis.ts";
+import { bashCommandContexts } from "./bash-context.ts";
 import { staticShellWord } from "./shell-word.ts";
 import {
 	FD_EXEC_FLAGS,
@@ -84,7 +85,7 @@ function fdExecutingFlag(args: string[]): string | undefined {
 	return undefined;
 }
 
-async function riskForCommand(node: any, splitter?: string, cwd?: string): Promise<BashCommandRisk> {
+async function riskForCommand(node: any, splitter?: string, cwd?: string, env = process.env): Promise<BashCommandRisk> {
 	const segmentNode = getCommandSegmentNode(node);
 	const command = segmentNode.text.trim();
 	const name = getCommandName(node) ?? "assignment";
@@ -98,11 +99,11 @@ async function riskForCommand(node: any, splitter?: string, cwd?: string): Promi
 	if (name === "assignment") return withSplitter({ command, name, harmless: true, reason: "variable assignment only" });
 
 	if (name === "cd") {
-		if (process.env.CDPATH || (node.namedChildren ?? []).some((child: any) => child.type === "variable_assignment")) {
+		if (env.CDPATH || (node.namedChildren ?? []).some((child: any) => child.type === "variable_assignment")) {
 			return withSplitter({ command, name, harmless: false, reason: "cd environment cannot be checked" });
 		}
 		if (!cwd) return withSplitter({ command, name, harmless: false, reason: "cd destination cannot be checked" });
-		const values = commandArgumentNodes(node).map((argument) => staticShellWord(argument.text, process.env));
+		const values = commandArgumentNodes(node).map((argument) => staticShellWord(argument.text, env));
 		if (values.some((value) => value === undefined)) {
 			return withSplitter({ command, name, harmless: false, reason: "cd destination uses shell expansion" });
 		}
@@ -268,27 +269,14 @@ async function risksForParsedCommand(command: string, parser: any, depth = 0, cw
 	const sortedNodes = nodes.sort((a, b) => a.startIndex - b.startIndex);
 	let previousEnd = 0;
 	const risks: BashCommandRisk[] = [];
-	let gitCwd = cwd;
+	const contexts = await bashCommandContexts(tree.rootNode, cwd);
 	for (const node of sortedNodes) {
 		const splitter = command.slice(previousEnd, node.startIndex).trim();
 		previousEnd = getCommandSegmentNode(node).endIndex;
-		const contextChanges = (entry: any): boolean => {
-			if (entry.startIndex >= node.startIndex) return false;
-			if (entry.type === "variable_assignment" || entry.type === "declaration_command") return true;
-			if (entry.type === "command") {
-				const name = getCommandName(entry);
-				if (!name || !READ_ONLY_COMMANDS.has(name) || ["printf", "command"].includes(name)) return true;
-			}
-			return (entry.namedChildren ?? []).some(contextChanges);
-		};
-		let nestedContext = false;
-		for (let parent = node.parent; parent; parent = parent.parent) {
-			if (["for_statement", "while_statement", "c_style_for_statement", "function_definition", "subshell"].includes(parent.type)) nestedContext = true;
-		}
-		const contextUnknown = nestedContext || contextChanges(tree.rootNode);
-		let risk = await riskForCommand(node, splitter || undefined, contextUnknown ? undefined : cwd);
+		const context = contexts.get(node.startIndex);
+		let risk = await riskForCommand(node, splitter || undefined, context?.cwd, context?.env);
 		if (risk.name === "git") {
-			const git = await analyzeGitInvocation(node, contextUnknown ? undefined : gitCwd);
+			const git = await analyzeGitInvocation(node, context?.cwd, context?.env);
 			const normalizedNodes: any[] = [];
 			if (git.target) collectCommandNodes(parser.parse(git.command).rootNode, normalizedNodes);
 			const normalizedNode = normalizedNodes[0];
@@ -303,7 +291,6 @@ async function risksForParsedCommand(command: string, parser: any, depth = 0, cw
 				harmless: !!git.target && !!normalizedRisk?.harmless && !hasWritingRedirectNode(getCommandSegmentNode(node)),
 			};
 		}
-		if (["cd", "export", "source", ".", "eval", "assignment"].includes(risk.name)) gitCwd = undefined;
 		const sshParts = depth < 4 ? sshCommandParts(node) : undefined;
 		if (sshParts) risk = { ...risk, command: sshParts.transport };
 		risks.push(risk);

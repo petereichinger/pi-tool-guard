@@ -545,6 +545,79 @@ test("does not discover an enclosing repository from inside nested bare metadata
 	assert.match(result.error ?? "", /Bare Git repository/);
 });
 
+test("tracks successful static cd commands before Git", async (t) => {
+	const { root, repo, gitDir } = await fixture(t);
+	await mkdir(join(repo, "nested"));
+	for (const command of [
+		"cd repo && git status",
+		"cd -- repo && git status",
+		"cd repo && # destination is known\n git status",
+		"cd repo </dev/null && git status",
+		'cd repo && cd "$PWD" && git -C "$PWD" status',
+		'cd repo && cd nested && cd "$OLDPWD" && git status',
+		"cd -P repo && git status",
+		"cd repo && cd nested && git status && git diff",
+		"cd repo && cd nested && cd .. && git status",
+		`cd '${repo.replaceAll("\\", "/")}' && git status`,
+		'cd "$TOOL_GUARD_TEST_TARGET" && git status',
+	]) {
+		const analysis = await analyzeBash(command, root);
+		const commands = analysis.commands.filter((item) => item.name === "git");
+		assert.ok(commands.length);
+		for (const item of commands) {
+			assert.deepEqual(item.git?.target, { gitDir, workTree: repo }, command);
+			assert.equal(item.harmless, true, command);
+		}
+	}
+});
+
+test("keeps Git unresolved after ambiguous cd control flow or destinations", async (t) => {
+	const { root } = await fixture(t);
+	for (const command of [
+		"cd repo; git status",
+		"cd repo || git status",
+		"cd repo && git diff; git status",
+		"true || cd repo && git status",
+		"cd missing && git status",
+		'cd "$REPO" && git status',
+		"cd - && git status",
+		"cd && git status",
+		"cd --unknown repo && git status",
+		"cd repo extra && git status",
+		"CDPATH=other cd repo && git status",
+		"cd repo | cat; git status",
+		"(cd repo) && git status",
+		"if true; then cd repo; fi; git status",
+		"cd repo & git status",
+		'cd repo < "${CDPATH:=other}/file" && git status',
+		'cd repo < "$(echo /dev/null)" && git status',
+		'cd repo <<< "${CDPATH:=other}" && git status',
+	]) {
+		const analysis = await analyzeBash(command, root);
+		const item = analysis.commands.filter((item) => item.name === "git").at(-1);
+		assert.ok(item, command);
+		assert.equal(item.git?.target, undefined, command);
+		assert.ok(item.git?.error, command);
+	}
+	process.env.CDPATH = root;
+	t.after(() => { delete process.env.CDPATH; });
+	assert.equal((await analyzeBash("cd repo && git status", root)).commands.at(-1)?.git?.target, undefined);
+});
+
+test("cd keeps logical and physical symlink traversal separate", { skip: process.platform === "win32" }, async (t) => {
+	const { root, repo, gitDir } = await fixture(t);
+	const other = join(root, "other");
+	await mkdir(join(other, "child"), { recursive: true });
+	await metadata(join(other, ".git"));
+	await symlink(join(other, "child"), join(repo, "link"));
+	for (const command of ["cd link/.. && git status", "cd link && cd .. && git status"]) {
+		assert.deepEqual((await analyzeBash(command, repo)).commands.at(-1)?.git?.target, { gitDir, workTree: repo }, command);
+	}
+	for (const command of ["cd -P link/.. && git status", "cd -P link && cd .. && git status"]) {
+		assert.deepEqual((await analyzeBash(command, repo)).commands.at(-1)?.git?.target, { gitDir: join(other, ".git"), workTree: other }, command);
+	}
+});
+
 test("does not assume unchanged Git environment after shell mutations", async (t) => {
 	const { repo } = await fixture(t);
 	for (const command of [

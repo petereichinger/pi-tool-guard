@@ -82,6 +82,31 @@ test("the current repository is allowed by default without storing an approval",
 	assert.deepEqual(f.prompts, []);
 });
 
+test("static cd preserves current repository approval and target denies", async (t) => {
+	const f = await fixture(t);
+	f.ctx.cwd = f.target.workTree!;
+	f.ctx.hasUI = false;
+	await mkdir(join(f.ctx.cwd, "nested"));
+	for (const command of ["cd . && git status", "cd nested && git status && git diff", `cd '${f.ctx.cwd.replaceAll("\\", "/")}' && git status`]) {
+		assert.equal(await f.run(command), undefined, command);
+	}
+	f.sessionDenyTargets.push(f.target);
+	assert.match((await f.run("cd . && git status"))?.reason ?? "", /Git target denied/);
+	assert.deepEqual(f.prompts, []);
+	assert.deepEqual(f.sessionTargets, []);
+});
+
+test("cd to another repository still requires target approval", async (t) => {
+	const f = await fixture(t);
+	const other = await f.repository("other");
+	f.ctx.cwd = f.target.workTree!;
+	f.answers.push("Deny");
+	assert.equal((await f.run(`cd '${other.workTree!.replaceAll("\\", "/")}' && git status`))?.block, true);
+	assert.deepEqual(stages(f.prompts), ["target"]);
+	assert.ok(f.prompts[0].title.includes(other.gitDir));
+	assert.ok(!f.prompts[0].title.includes("Unknown target"));
+});
+
 test("safe global includes preserve current repository approval and explicit denies", async (t) => {
 	const f = await fixture(t);
 	await mkdir(join(f.root, ".config", "delta"), { recursive: true });

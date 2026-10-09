@@ -213,7 +213,7 @@ export async function resolveCurrentGitTarget(cwd: string): Promise<{ gitDir: st
 	}
 }
 
-export async function analyzeGitInvocation(node: any, cwd?: string): Promise<GitInvocationAnalysis> {
+export async function analyzeGitInvocation(node: any, cwd?: string, inheritedEnvironment = process.env): Promise<GitInvocationAnalysis> {
 	const segment = node.parent?.type === "redirected_statement" ? node.parent : node;
 	const original = segment.text.trim();
 	const fail = (error: string): GitInvocationAnalysis => ({ command: original, error });
@@ -226,7 +226,7 @@ export async function analyzeGitInvocation(node: any, cwd?: string): Promise<Git
 		const children: any[] = node.namedChildren ?? (node.children ?? []).filter((child: any) => child.isNamed);
 		const assignments = children.filter((child) => child.type === "variable_assignment");
 		const args = children.filter((child) => child !== name && child.type !== "variable_assignment" && child.type !== "file_redirect");
-		const inheritedEnv: Record<string, string | undefined> = { ...process.env };
+		const inheritedEnv: Record<string, string | undefined> = { ...inheritedEnvironment };
 		const values = args.map((arg) => staticShellWord(arg.text, inheritedEnv));
 		if (values.some((value) => value === undefined)) return fail("Git arguments use shell expansion");
 		const argv = values as string[];

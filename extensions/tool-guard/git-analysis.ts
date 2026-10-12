@@ -1,5 +1,6 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import { staticShellWord } from "./shell-word.ts";
+import { sameShellNode } from "./shell-node.ts";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { physicalShellPath as physicalPath, shellDirectory as directory } from "./shell-path.ts";
 
@@ -225,7 +226,7 @@ export async function analyzeGitInvocation(node: any, cwd?: string, inheritedEnv
 		if (!name || staticShellWord(name.text) !== "git") return fail("Git executable cannot be identified statically");
 		const children: any[] = node.namedChildren ?? (node.children ?? []).filter((child: any) => child.isNamed);
 		const assignments = children.filter((child) => child.type === "variable_assignment");
-		const args = children.filter((child) => child !== name && child.type !== "variable_assignment" && child.type !== "file_redirect");
+		const args = children.filter((child) => !sameShellNode(child, name) && child.type !== "variable_assignment" && child.type !== "file_redirect");
 		const inheritedEnv: Record<string, string | undefined> = { ...inheritedEnvironment };
 		const values = args.map((arg) => staticShellWord(arg.text, inheritedEnv));
 		if (values.some((value) => value === undefined)) return fail("Git arguments use shell expansion");
@@ -310,10 +311,10 @@ export async function analyzeGitInvocation(node: any, cwd?: string, inheritedEnv
 			}
 		}
 
-		const commandParts = children.filter((child) => !removed.has(child)).map((child) => child === name ? "git" : child.text);
-		if (segment !== node) {
+		const commandParts = children.filter((child) => !removed.has(child)).map((child) => sameShellNode(child, name) ? "git" : child.text);
+		if (!sameShellNode(segment, node)) {
 			for (const child of segment.namedChildren ?? []) {
-				if (child !== node) commandParts.push(child.text);
+				if (!sameShellNode(child, node)) commandParts.push(child.text);
 			}
 		}
 		return { command: commandParts.join(" "), target: workTree === undefined ? { gitDir } : { gitDir, workTree } };

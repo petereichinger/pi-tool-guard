@@ -6,15 +6,29 @@ import test from "node:test";
 
 import { analyzeBash } from "../extensions/tool-guard/bash-analysis.ts";
 import { analyzeGitInvocation } from "../extensions/tool-guard/git-analysis.ts";
+import { bashCommandContexts } from "../extensions/tool-guard/bash-context.ts";
 import { getBashParser } from "../extensions/tool-guard/tree-sitter.ts";
 
-async function analyze(command: string, cwd?: string) {
+function freshNode(node: any): any {
+	if (!node) return node;
+	return {
+		type: node.type, text: node.text, startIndex: node.startIndex, endIndex: node.endIndex,
+		hasError: node.hasError, isNamed: node.isNamed,
+		get parent() { return freshNode(node.parent); },
+		get children() { return node.children.map(freshNode); },
+		get namedChildren() { return node.namedChildren.map(freshNode); },
+		childForFieldName: (field: string) => freshNode(node.childForFieldName(field)),
+		descendantsOfType: (type: string) => node.descendantsOfType(type).map(freshNode),
+	};
+}
+
+async function analyze(command: string, cwd?: string, freshWrappers = false) {
 	const { parser, error } = await getBashParser();
 	assert.ok(parser, error);
 	const tree = parser.parse(command);
 	const commands = tree.rootNode.descendantsOfType("command");
 	assert.ok(commands.length > 0);
-	return analyzeGitInvocation(commands[0], cwd);
+	return analyzeGitInvocation(freshWrappers ? freshNode(commands[0]) : commands[0], cwd);
 }
 
 async function metadata(path: string, bare = false) {
@@ -56,6 +70,35 @@ test.after(() => {
 	else process.env.HOME = inheritedHome;
 	if (inheritedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
 	else process.env.XDG_CONFIG_HOME = inheritedXdg;
+});
+
+test("Git target resolution does not depend on parser wrapper identity", async (t) => {
+	const { root, repo, gitDir } = await fixture(t);
+	for (const [command, normalized] of [
+		["git -C repo diff --stat", "git diff --stat"],
+		["git -C repo log -1 --oneline; git -C repo diff --stat", "git log -1 --oneline"],
+		["GIT_DIR=repo/.git GIT_WORK_TREE=repo git --no-pager diff -- 'git' >output", "git --no-pager diff -- 'git' >output"],
+	]) {
+		assert.deepEqual(await analyze(command, root, true), {
+			command: normalized, target: { gitDir, workTree: repo },
+		}, command);
+	}
+});
+
+test("cd contexts do not depend on parser wrapper identity", async (t) => {
+	const { root, repo, gitDir } = await fixture(t);
+	const { parser, error } = await getBashParser();
+	assert.ok(parser, error);
+	for (const command of ["cd repo && git diff --stat", "cd repo >output && git diff --stat"]) {
+		const tree = parser.parse(command);
+		const contexts = await bashCommandContexts(freshNode(tree.rootNode), root);
+		const git = tree.rootNode.descendantsOfType("command").find((node: any) => node.text.startsWith("git "));
+		assert.ok(git);
+		assert.equal(contexts.get(git.startIndex)?.cwd, repo);
+		assert.deepEqual(await analyzeGitInvocation(freshNode(git), contexts.get(git.startIndex)?.cwd), {
+			command: "git diff --stat", target: { gitDir, workTree: repo },
+		}, command);
+	}
 });
 
 test("discovers metadata from a nested working directory", async (t) => {

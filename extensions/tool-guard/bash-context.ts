@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { physicalShellPath, shellDirectory } from "./shell-path.ts";
 import { staticShellWord } from "./shell-word.ts";
+import { sameShellNode } from "./shell-node.ts";
 
 export type BashCommandContext = { cwd: string; env: Record<string, string | undefined> };
 type Outcomes = { success?: BashCommandContext; failure?: BashCommandContext };
@@ -32,7 +33,7 @@ async function cdDestination(node: any, context: BashCommandContext | undefined)
 	let optionsEnded = false;
 	let destination: string | undefined;
 	for (const child of children) {
-		if (child === name) continue;
+		if (sameShellNode(child, name)) continue;
 		const value = staticShellWord(child.text, env);
 		if (value === undefined) return undefined;
 		if (!optionsEnded && value === "--") {
@@ -101,7 +102,7 @@ export async function bashCommandContexts(root: any, cwd?: string): Promise<Map<
 				const destination = redirect.childForFieldName("destination");
 				return destination && staticShellWord(destination.text, current?.env) !== undefined;
 			});
-			if (command?.type === "command" && staticRedirects && (node.namedChildren ?? []).every((child: any) => child === command || child.type === "file_redirect")) {
+			if (command?.type === "command" && staticRedirects && (node.namedChildren ?? []).every((child: any) => sameShellNode(child, command) || child.type === "file_redirect")) {
 				const outcomes = await visit(command, current);
 				return { success: outcomes.success, failure: merge(current, outcomes.failure) };
 			}

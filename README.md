@@ -52,7 +52,7 @@ This extension depends on `tree-sitter` and `tree-sitter-bash`. In plain Node.js
 /yolo
 ```
 
-`/yolo` toggles YOLO mode for the current extension runtime. While it is enabled, Tool Guard allows all shell calls and file mutations without checking allow or deny rules and without asking for confirmation. The Working indicator shows a dancing Kirby animation beside `Vibing...` while the mode is active. Run `/yolo` again to disable it and restore the default spinner and Working text.
+`/yolo` toggles YOLO mode for the current extension runtime. While it is enabled, Tool Guard allows all shell calls and file mutations without checking allow or deny rules and without asking for confirmation. The Working indicator shows a dancing Kirby animation beside `Vibing...` while the mode is active. It alternates between the original mouth animation and a tongue-out animation at the start of each agent turn, including tool follow-up turns, with 180 ms per frame. Enabling YOLO starts with the original animation. Run `/yolo` again to disable it and restore the default spinner and Working text.
 
 Tool Guard creates a temporary shared state file at session startup, even when YOLO is disabled. Child pi processes inherit its path through `PI_TOOL_GUARD_YOLO_STATE` and read the current state before each tool call. Already-running `pi-delegate-workers` workers and their nested workers therefore follow parent `/yolo` changes in both directions. Queued permission requests also recheck YOLO before approval. An approval dialog that is already open still needs a response.
 

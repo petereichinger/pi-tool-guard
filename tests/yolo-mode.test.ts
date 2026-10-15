@@ -80,6 +80,7 @@ function createRuntime(scope: ReturnType<typeof isolate>, extension = registerYo
 	return {
 		mode, ctx, handlers, statuses, workingMessages, workingIndicators, notifications, entries,
 		start: (reason = "startup") => lifecycle("session_start", { reason }),
+		turn: () => lifecycle("turn_start"),
 		shutdown: () => lifecycle("session_shutdown"),
 		toggle: () => commands.get("yolo").handler("", ctx),
 	};
@@ -189,6 +190,48 @@ test("startup creates disabled shared state, toggles the Working message without
 	assert.equal(runtime.workingMessages.at(-1), undefined);
 	assert.deepEqual(runtime.statuses, []);
 	assert.deepEqual(runtime.entries, []);
+});
+
+test("YOLO alternates Kirby mouths each turn and restarts with the original animation when enabled", async (t) => {
+	const runtime = createRuntime(isolate(t));
+	await runtime.start();
+	const initialUpdates = runtime.workingIndicators.length;
+	await runtime.turn();
+	assert.equal(runtime.workingIndicators.length, initialUpdates);
+
+	await runtime.toggle();
+	const original = runtime.workingIndicators.at(-1);
+	await runtime.turn();
+	assert.deepEqual(runtime.workingIndicators.at(-1), original);
+	await runtime.turn();
+	assert.deepEqual(runtime.workingIndicators.at(-1), {
+		frames: ["(>'-')>", "(>'∪')>", "<('-'<)", "<('∪'<)", "^('-')^", "^('∪')^", "<('-')>", "v('∪')v"],
+		intervalMs: 180,
+	});
+	await runtime.turn();
+	assert.deepEqual(runtime.workingIndicators.at(-1), original);
+	await runtime.turn();
+	assert.notDeepEqual(runtime.workingIndicators.at(-1), original);
+
+	await runtime.toggle();
+	const disabledUpdates = runtime.workingIndicators.length;
+	await runtime.turn();
+	assert.equal(runtime.workingIndicators.length, disabledUpdates);
+	await runtime.toggle();
+	await runtime.turn();
+	assert.deepEqual(runtime.workingIndicators.at(-1), original);
+});
+
+test("worker turns do not change the Working indicator", async (t) => {
+	const scope = isolate(t);
+	process.env.PI_DELEGATE_WORKER_DEPTH = "1";
+	process.env[YOLO_ENVIRONMENT_VARIABLE] = "1";
+	const runtime = createRuntime(scope);
+	await runtime.start();
+	await runtime.turn();
+	await runtime.turn();
+	assert.deepEqual(runtime.workingIndicators, []);
+	assert.deepEqual(runtime.workingMessages, []);
 });
 
 for (const reason of ["new", "resume", "reload", "fork"]) {

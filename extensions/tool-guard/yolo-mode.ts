@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-const KIRBY_FRAMES = ["(>'-')>", "(>'-')>", "<('-'<)", "<('-'<)", "^('-')^", "^('o')^", "<('-')>", "v('-')v"];
+const KIRBY_ANIMATIONS = [
+	["(>'-')>", "(>'-')>", "<('-'<)", "<('-'<)", "^('-')^", "^('o')^", "<('-')>", "v('-')v"],
+	["(>'-')>", "(>'∪')>", "<('-'<)", "<('∪'<)", "^('-')^", "^('∪')^", "<('-')>", "v('∪')v"],
+];
 
 export const YOLO_ENVIRONMENT_VARIABLE = "PI_TOOL_GUARD_YOLO";
 export const YOLO_STATE_ENVIRONMENT_VARIABLE = "PI_TOOL_GUARD_YOLO_STATE";
@@ -22,6 +25,7 @@ export function registerYoloMode(pi: ExtensionAPI): YoloMode {
 	const inherited = Boolean(stateFile);
 	const isWorker = Number(process.env.PI_DELEGATE_WORKER_DEPTH ?? "0") > 0;
 	let stateDirectory: string | undefined;
+	let animationIndex = -1;
 
 	const isEnabled = () => {
 		if (!stateFile) return enabled;
@@ -49,7 +53,7 @@ export function registerYoloMode(pi: ExtensionAPI): YoloMode {
 		if (isWorker) return;
 		const active = isEnabled();
 		ctx.ui.setWorkingMessage(active ? "Vibing..." : undefined);
-		ctx.ui.setWorkingIndicator(active ? { frames: KIRBY_FRAMES, intervalMs: 180 } : undefined);
+		ctx.ui.setWorkingIndicator(active ? { frames: KIRBY_ANIMATIONS[Math.max(0, animationIndex)], intervalMs: 180 } : undefined);
 	};
 
 	pi.registerCommand("yolo", {
@@ -60,6 +64,7 @@ export function registerYoloMode(pi: ExtensionAPI): YoloMode {
 				return;
 			}
 			setEnabled(!isEnabled());
+			if (enabled) animationIndex = -1;
 			updateWorkingMessage(ctx);
 			ctx.ui.notify(`YOLO mode ${enabled ? "enabled" : "disabled"}.`, enabled ? "warning" : "info");
 		},
@@ -67,6 +72,13 @@ export function registerYoloMode(pi: ExtensionAPI): YoloMode {
 
 	pi.on("session_start", async (event, ctx) => {
 		if (!inherited) setEnabled(event.reason === "startup" ? enabled : false);
+		animationIndex = -1;
+		updateWorkingMessage(ctx);
+	});
+
+	pi.on("turn_start", async (_event, ctx) => {
+		if (isWorker || !isEnabled()) return;
+		animationIndex = (animationIndex + 1) % KIRBY_ANIMATIONS.length;
 		updateWorkingMessage(ctx);
 	});
 

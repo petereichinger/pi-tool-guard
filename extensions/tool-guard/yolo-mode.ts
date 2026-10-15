@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-const STATUS_ID = "tool-guard-yolo";
+const KIRBY_FRAMES = ["(>'-')>", "(>'-')>", "<('-'<)", "<('-'<)", "^('-')^", "^('o')^", "<('-')>", "v('-')v"];
+
 export const YOLO_ENVIRONMENT_VARIABLE = "PI_TOOL_GUARD_YOLO";
 export const YOLO_STATE_ENVIRONMENT_VARIABLE = "PI_TOOL_GUARD_YOLO_STATE";
 
@@ -44,8 +45,11 @@ export function registerYoloMode(pi: ExtensionAPI): YoloMode {
 		if (value) process.env[YOLO_ENVIRONMENT_VARIABLE] = "1";
 		else delete process.env[YOLO_ENVIRONMENT_VARIABLE];
 	};
-	const updateStatus = (ctx: ExtensionContext) => {
-		if (!isWorker) ctx.ui.setStatus(STATUS_ID, isEnabled() ? ctx.ui.theme.fg("warning", "YOLO") : undefined);
+	const updateWorkingMessage = (ctx: ExtensionContext) => {
+		if (isWorker) return;
+		const active = isEnabled();
+		ctx.ui.setWorkingMessage(active ? "Vibing..." : undefined);
+		ctx.ui.setWorkingIndicator(active ? { frames: KIRBY_FRAMES, intervalMs: 180 } : undefined);
 	};
 
 	pi.registerCommand("yolo", {
@@ -56,14 +60,14 @@ export function registerYoloMode(pi: ExtensionAPI): YoloMode {
 				return;
 			}
 			setEnabled(!isEnabled());
-			updateStatus(ctx);
+			updateWorkingMessage(ctx);
 			ctx.ui.notify(`YOLO mode ${enabled ? "enabled" : "disabled"}.`, enabled ? "warning" : "info");
 		},
 	});
 
 	pi.on("session_start", async (event, ctx) => {
 		if (!inherited) setEnabled(event.reason === "startup" ? enabled : false);
-		updateStatus(ctx);
+		updateWorkingMessage(ctx);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
@@ -74,7 +78,7 @@ export function registerYoloMode(pi: ExtensionAPI): YoloMode {
 		delete process.env[YOLO_ENVIRONMENT_VARIABLE];
 		stateDirectory = undefined;
 		stateFile = undefined;
-		updateStatus(ctx);
+		updateWorkingMessage(ctx);
 	});
 
 	return { isEnabled };

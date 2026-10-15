@@ -7,6 +7,8 @@ import { registerYoloMode } from "../../extensions/tool-guard/yolo-mode.ts";
 const commands = new Map<string, any>();
 const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
 const statuses: Array<string | undefined> = [];
+const workingMessages: Array<string | undefined> = [];
+const workingIndicators: Array<{ frames: string[]; intervalMs: number } | undefined> = [];
 const notifications: Array<{ message: string; level: string }> = [];
 const entries: unknown[] = [];
 const ctx = {
@@ -15,6 +17,8 @@ const ctx = {
 	ui: {
 		theme: { fg: (_color: string, text: string) => `[warning]${text}` },
 		setStatus: (_id: string, value: string | undefined) => statuses.push(value),
+		setWorkingMessage: (value: string | undefined) => workingMessages.push(value),
+		setWorkingIndicator: (value: { frames: string[]; intervalMs: number } | undefined) => workingIndicators.push(value),
 		notify: (message: string, level: string) => notifications.push({ message, level }),
 	},
 };
@@ -38,6 +42,8 @@ function snapshot() {
 	return {
 		enabled: mode.isEnabled(),
 		statuses,
+		workingMessages,
+		workingIndicators,
 		notifications,
 		entries,
 		stateFile: process.env.PI_TOOL_GUARD_YOLO_STATE,

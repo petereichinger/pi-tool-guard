@@ -49,6 +49,8 @@ function createRuntime(scope: ReturnType<typeof isolate>, extension = registerYo
 	const commands = new Map<string, any>();
 	const handlers = new Map<string, Array<(event: any, ctx: any) => Promise<any>>>();
 	const statuses: Array<{ id: string; value: string | undefined }> = [];
+	const workingMessages: Array<string | undefined> = [];
+	const workingIndicators: Array<{ frames: string[]; intervalMs: number } | undefined> = [];
 	const notifications: Array<{ message: string; level: string }> = [];
 	const entries: unknown[] = [];
 	const pi = {
@@ -63,6 +65,8 @@ function createRuntime(scope: ReturnType<typeof isolate>, extension = registerYo
 		ui: {
 			theme: { fg: (_color: string, text: string) => `[warning]${text}` },
 			setStatus: (id: string, value: string | undefined) => statuses.push({ id, value }),
+			setWorkingMessage: (value: string | undefined) => workingMessages.push(value),
+			setWorkingIndicator: (value: { frames: string[]; intervalMs: number } | undefined) => workingIndicators.push(value),
 			notify: (message: string, level: string) => notifications.push({ message, level }),
 		},
 	};
@@ -74,7 +78,7 @@ function createRuntime(scope: ReturnType<typeof isolate>, extension = registerYo
 	};
 	scope.cleanup.push(() => lifecycle("session_shutdown"));
 	return {
-		mode, ctx, handlers, statuses, notifications, entries,
+		mode, ctx, handlers, statuses, workingMessages, workingIndicators, notifications, entries,
 		start: (reason = "startup") => lifecycle("session_start", { reason }),
 		shutdown: () => lifecycle("session_shutdown"),
 		toggle: () => commands.get("yolo").handler("", ctx),
@@ -139,39 +143,51 @@ function assertWorker(snapshot: any, enabled: boolean, path: string, depth: numb
 	assert.equal(snapshot.stateFile, path);
 	assert.equal(snapshot.depth, depth);
 	assert.deepEqual(snapshot.statuses, [], "Workers must not add a YOLO footer status");
+	assert.deepEqual(snapshot.workingMessages, [], "Workers must not change the Working message");
+	assert.deepEqual(snapshot.workingIndicators, [], "Workers must not change the Working indicator");
 	assert.deepEqual(snapshot.entries, [], "YOLO state must not be persisted to session entries");
 }
 
-test("startup creates disabled shared state, toggles status, and shutdown removes owned state", async (t) => {
+test("startup creates disabled shared state, toggles the Working message without footer text, and shutdown removes owned state", async (t) => {
 	const runtime = createRuntime(isolate(t));
 	assert.equal(runtime.mode.isEnabled(), false);
 	await runtime.start();
 	const path = sharedFile();
 	assert.equal(readFileSync(path, "utf8"), "0");
 	assert.equal(process.env[YOLO_ENVIRONMENT_VARIABLE], undefined);
-	assert.deepEqual(runtime.statuses.at(-1), { id: "tool-guard-yolo", value: undefined });
+	assert.equal(runtime.workingMessages.at(-1), undefined);
+	assert.deepEqual(runtime.statuses, []);
 
 	await runtime.toggle();
 	assert.equal(runtime.mode.isEnabled(), true);
 	assert.equal(readFileSync(path, "utf8"), "1");
 	assert.equal(process.env[YOLO_ENVIRONMENT_VARIABLE], "1");
-	assert.deepEqual(runtime.statuses.at(-1), { id: "tool-guard-yolo", value: "[warning]YOLO" });
+	assert.equal(runtime.workingMessages.at(-1), "Vibing...");
+	assert.deepEqual(runtime.workingIndicators.at(-1), {
+		frames: ["(>'-')>", "(>'-')>", "<('-'<)", "<('-'<)", "^('-')^", "^('o')^", "<('-')>", "v('-')v"],
+		intervalMs: 180,
+	});
+	assert.deepEqual(runtime.statuses, []);
 	assert.deepEqual(runtime.notifications.at(-1), { message: "YOLO mode enabled.", level: "warning" });
 
 	await runtime.toggle();
 	assert.equal(runtime.mode.isEnabled(), false);
 	assert.equal(readFileSync(path, "utf8"), "0");
 	assert.equal(process.env[YOLO_ENVIRONMENT_VARIABLE], undefined);
-	assert.deepEqual(runtime.statuses.at(-1), { id: "tool-guard-yolo", value: undefined });
+	assert.equal(runtime.workingMessages.at(-1), undefined);
+	assert.deepEqual(runtime.statuses, []);
 	assert.deepEqual(runtime.notifications.at(-1), { message: "YOLO mode disabled.", level: "info" });
+	assert.equal(runtime.workingIndicators.at(-1), undefined);
 
 	await runtime.toggle();
 	await runtime.shutdown();
 	assert.equal(runtime.mode.isEnabled(), false);
 	assert.equal(existsSync(dirname(path)), false);
+	assert.equal(runtime.workingIndicators.at(-1), undefined);
 	assert.equal(process.env[YOLO_STATE_ENVIRONMENT_VARIABLE], undefined);
 	assert.equal(process.env[YOLO_ENVIRONMENT_VARIABLE], undefined);
-	assert.deepEqual(runtime.statuses.at(-1), { id: "tool-guard-yolo", value: undefined });
+	assert.equal(runtime.workingMessages.at(-1), undefined);
+	assert.deepEqual(runtime.statuses, []);
 	assert.deepEqual(runtime.entries, []);
 });
 
@@ -186,6 +202,8 @@ for (const reason of ["new", "resume", "reload", "fork"]) {
 		assert.equal(sharedFile(), path);
 		assert.equal(readFileSync(path, "utf8"), "0");
 		assert.equal(process.env[YOLO_ENVIRONMENT_VARIABLE], undefined);
+		assert.equal(runtime.workingMessages.at(-1), undefined);
+		assert.equal(runtime.workingIndicators.at(-1), undefined);
 		assert.deepEqual(runtime.entries, []);
 	});
 }
@@ -201,7 +219,12 @@ for (const value of ["1", "true", "yes", "on", "enabled", " TRUE ", "0", "false"
 		assert.equal(runtime.mode.isEnabled(), enabled);
 		assert.equal(readFileSync(path, "utf8"), enabled ? "1" : "0");
 		assert.equal(process.env[YOLO_ENVIRONMENT_VARIABLE], enabled ? "1" : undefined);
-		assert.equal(runtime.statuses.at(-1)?.value, enabled ? "[warning]YOLO" : undefined);
+		assert.equal(runtime.workingMessages.at(-1), enabled ? "Vibing..." : undefined);
+		assert.deepEqual(runtime.workingIndicators.at(-1), enabled ? {
+			frames: ["(>'-')>", "(>'-')>", "<('-'<)", "<('-'<)", "^('-')^", "^('o')^", "<('-')>", "v('-')v"],
+			intervalMs: 180,
+		} : undefined);
+		assert.deepEqual(runtime.statuses, []);
 		await runtime.shutdown();
 		assert.equal(runtime.mode.isEnabled(), false);
 		assert.equal(existsSync(dirname(path)), false);
